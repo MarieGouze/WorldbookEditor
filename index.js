@@ -11,6 +11,7 @@ const CONFIG = {
     id: 'enhanced-wb-panel-v6',
     btnId: 'wb-menu-btn-v6',
     settingsKey: 'WorldbookEditor_Metadata',
+    presetStoreKey: '__ENTRY_STATE_PRESETS__',
 };
 
 const STATE = {
@@ -22,6 +23,8 @@ const STATE = {
     allBookNames: [],
     metadata: {},
     boundBooksSet: {},
+    searchText: '',
+    selectedUids: new Set(),
     bindings: {
         char: { primary: null, additional: [] },
         global: [],
@@ -83,9 +86,15 @@ function normalizeEntry(raw, uidKey, index) {
     return entry;
 }
 
-/**
- * 兼容旧版 ST：更新角色主要世界书
- */
+function sortByOrder(entries) {
+    entries.sort((a, b) => {
+        const oa = Number(a.order ?? 0);
+        const ob = Number(b.order ?? 0);
+        if (oa !== ob) return oa - ob;
+        return Number(a.uid ?? 0) - Number(b.uid ?? 0);
+    });
+}
+
 async function charUpdatePrimaryWorld(name) {
     const context = getContext();
     const charId = context.characterId;
@@ -112,9 +121,6 @@ async function charUpdatePrimaryWorld(name) {
     if (context.saveCharacterDebounced) context.saveCharacterDebounced();
 }
 
-/**
- * 兼容旧版 ST：设置角色附加世界书
- */
 function charSetAuxWorlds(fileName, books) {
     const context = getContext();
     if (!world_info.charLore) world_info.charLore = [];
@@ -132,9 +138,6 @@ function charSetAuxWorlds(fileName, books) {
     if (context.saveSettingsDebounced) context.saveSettingsDebounced();
 }
 
-/**
- * 绑定处理
- */
 async function setCharBindings(type, worldName, isEnabled) {
     const context = getContext();
 
@@ -228,7 +231,8 @@ const API = {
             arr.push(normalizeEntry(entry, uidKey, idx));
         });
 
-        return arr.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        sortByOrder(arr);
+        return arr;
     },
 
     async saveBookEntries(name, entriesArray) {
@@ -349,6 +353,19 @@ const Actions = {
         }
     },
 
+    queueSave() {
+        if (STATE.debouncer) clearTimeout(STATE.debouncer);
+        const targetBookName = STATE.currentBookName;
+        const targetEntries = STATE.entries;
+
+        STATE.debouncer = setTimeout(() => {
+            STATE.debouncer = null;
+            if (targetBookName && targetEntries) {
+                API.saveBookEntries(targetBookName, targetEntries);
+            }
+        }, 280);
+    },
+
     getEntrySortScore(entry) {
         const context = getContext();
         const anDepth = (context.chatMetadata && context.chatMetadata.note_depth)
@@ -422,6 +439,7 @@ const Actions = {
             STATE.metadata = API.getMetadata();
 
             UI.renderBookSelector();
+            UI.renderPresetBar();
             UI.renderBindingView();
             if (STATE.currentView === 'manage') UI.renderManageView();
             if (STATE.currentView === 'stitch') UI.renderStitchView();
@@ -440,6 +458,7 @@ const Actions = {
 
         await this.flushPendingSave();
         STATE.currentBookName = name;
+        STATE.selectedUids.clear();
 
         try {
             const loadedEntries = await API.loadBook(name);
@@ -455,8 +474,10 @@ const Actions = {
             });
 
             UI.renderBookSelector();
+            UI.renderPresetBar();
             UI.renderGlobalStats();
-            UI.renderList();
+            UI.renderList('');
+            UI.updateSelectionInfo();
         } catch (e) {
             if (STATE.currentBookName === name) {
                 console.error('Load book failed', e);
@@ -472,18 +493,7 @@ const Actions = {
         updater(entry);
         UI.updateCardStatus(uid);
         UI.renderGlobalStats();
-
-        if (STATE.debouncer) clearTimeout(STATE.debouncer);
-
-        const targetBookName = STATE.currentBookName;
-        const targetEntries = STATE.entries;
-
-        STATE.debouncer = setTimeout(() => {
-            STATE.debouncer = null;
-            if (targetBookName && targetEntries) {
-                API.saveBookEntries(targetBookName, targetEntries);
-            }
-        }, 300);
+        this.queueSave();
     },
 
     async addNewEntry() {
@@ -513,6 +523,7 @@ const Actions = {
     async deleteEntry(uid) {
         if (!confirm('确定要删除此条目吗？')) return;
         await API.deleteEntries(STATE.currentBookName, [uid]);
+        STATE.selectedUids.delete(uid);
         await this.loadBook(STATE.currentBookName);
     },
 
@@ -529,9 +540,174 @@ const Actions = {
             return a.uid - b.uid;
         });
 
-        UI.renderList();
+        UI.renderList(STATE.searchText);
         API.saveBookEntries(STATE.currentBookName, STATE.entries);
         toastr.success('已按优先级重排');
+    },
+
+    // ---------- 预设 ----------
+    getPresetStore() {
+        if (!STATE.metadata || typeof STATE.metadata !== 'object') STATE.metadata = {};
+        if (!STATE.metadata[CONFIG.presetStoreKey]) STATE.metadata[CONFIG.presetStoreKey] = {};
+        return STATE.metadata[CONFIG.presetStoreKey];
+    },
+
+    getBookPresets(bookName) {
+        const store = this.getPresetStore();
+        return Array.isArray(store[bookName]) ? store[bookName] : [];
+    },
+
+    async saveCurrentStatePreset() {
+        if (!STATE.currentBookName) return toastr.warning('请先选择一本世界书');
+
+        const defaultName = `状态_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
+        const name = prompt('输入状态名称:', defaultName);
+        if (!name) return;
+
+        const snapshot = {};
+        STATE.entries.forEach((entry) => {
+            snapshot[entry.uid] = {
+                disable: !!entry.disable,
+                constant: !!entry.constant,
+                order: Number(entry.order ?? 0),
+                depth: Number(entry.depth ?? 4),
+                position: Number(entry.position ?? 1),
+            };
+        });
+
+        const store = this.getPresetStore();
+        const list = this.getBookPresets(STATE.currentBookName);
+
+        const preset = {
+            id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            name,
+            snapshot,
+            updatedAt: Date.now(),
+        };
+
+        const existedIdx = list.findIndex((p) => p.name === name);
+        if (existedIdx >= 0) list[existedIdx] = preset;
+        else list.push(preset);
+
+        store[STATE.currentBookName] = list;
+        STATE.metadata[CONFIG.presetStoreKey] = store;
+        await API.saveMetadata(STATE.metadata);
+
+        UI.renderPresetBar();
+        toastr.success(`已保存状态: ${name}`);
+    },
+
+    async applyStatePreset(presetId) {
+        if (!STATE.currentBookName) return;
+        if (!presetId) return toastr.warning('请先选择状态预设');
+
+        const list = this.getBookPresets(STATE.currentBookName);
+        const preset = list.find((p) => p.id === presetId);
+        if (!preset) return toastr.warning('状态预设不存在');
+
+        const snap = preset.snapshot || {};
+        STATE.entries.forEach((entry) => {
+            const item = snap[entry.uid];
+            if (!item) return;
+            entry.disable = !!item.disable;
+            entry.constant = !!item.constant;
+            entry.order = Number(item.order ?? entry.order ?? 0);
+            entry.depth = Math.max(0, Number(item.depth ?? entry.depth ?? 4));
+            entry.position = Number(item.position ?? entry.position ?? 1);
+            entry.selective = !entry.constant;
+        });
+
+        sortByOrder(STATE.entries);
+        UI.renderList(STATE.searchText);
+        UI.renderGlobalStats();
+        await API.saveBookEntries(STATE.currentBookName, STATE.entries);
+        toastr.success(`已切换状态: ${preset.name}`);
+    },
+
+    async deleteStatePreset(presetId) {
+        if (!STATE.currentBookName) return;
+        if (!presetId) return toastr.warning('请先选择状态预设');
+
+        const store = this.getPresetStore();
+        const list = this.getBookPresets(STATE.currentBookName);
+        const idx = list.findIndex((p) => p.id === presetId);
+        if (idx < 0) return;
+
+        if (!confirm(`删除状态预设 "${list[idx].name}" ?`)) return;
+
+        list.splice(idx, 1);
+        store[STATE.currentBookName] = list;
+        STATE.metadata[CONFIG.presetStoreKey] = store;
+        await API.saveMetadata(STATE.metadata);
+
+        UI.renderPresetBar();
+        toastr.success('状态预设已删除');
+    },
+
+    // ---------- 多选/批量 ----------
+    selectEntry(uid, checked) {
+        const id = Number(uid);
+        if (checked) STATE.selectedUids.add(id);
+        else STATE.selectedUids.delete(id);
+        UI.updateSelectionInfo();
+    },
+
+    selectAllVisible() {
+        document.querySelectorAll('#wb-entry-list .wb-card[data-uid]').forEach((el) => {
+            STATE.selectedUids.add(Number(el.dataset.uid));
+        });
+        UI.renderList(STATE.searchText);
+    },
+
+    invertVisibleSelection() {
+        document.querySelectorAll('#wb-entry-list .wb-card[data-uid]').forEach((el) => {
+            const uid = Number(el.dataset.uid);
+            if (STATE.selectedUids.has(uid)) STATE.selectedUids.delete(uid);
+            else STATE.selectedUids.add(uid);
+        });
+        UI.renderList(STATE.searchText);
+    },
+
+    clearSelection() {
+        STATE.selectedUids.clear();
+        UI.renderList(STATE.searchText);
+    },
+
+    batchUpdate(updater) {
+        if (!STATE.selectedUids.size) return toastr.warning('请先勾选条目');
+
+        STATE.entries.forEach((entry) => {
+            if (STATE.selectedUids.has(Number(entry.uid))) updater(entry);
+        });
+
+        UI.renderList(STATE.searchText);
+        UI.renderGlobalStats();
+        this.queueSave();
+    },
+
+    batchEnable(flag) {
+        this.batchUpdate((entry) => { entry.disable = !flag; });
+    },
+
+    batchConstant(flag) {
+        this.batchUpdate((entry) => {
+            entry.constant = !!flag;
+            entry.selective = !entry.constant;
+        });
+    },
+
+    batchOrder(delta) {
+        const d = Number(delta);
+        if (!Number.isFinite(d) || d === 0) return;
+        this.batchUpdate((entry) => { entry.order = Number(entry.order ?? 0) + d; });
+        sortByOrder(STATE.entries);
+        UI.renderList(STATE.searchText);
+    },
+
+    batchDepth(delta) {
+        const d = Number(delta);
+        if (!Number.isFinite(d) || d === 0) return;
+        this.batchUpdate((entry) => { entry.depth = Math.max(0, Number(entry.depth ?? 4) + d); });
     },
 
     async saveBindings() {
@@ -678,9 +854,11 @@ const Actions = {
             await API.deleteWorldbook(STATE.currentBookName);
             STATE.currentBookName = null;
             STATE.entries = [];
+            STATE.selectedUids.clear();
             await this.refreshAllContext();
             UI.renderList();
             UI.renderGlobalStats();
+            UI.updateSelectionInfo();
         } catch (e) {
             toastr.error(`删除失败: ${e.message}`);
         }
@@ -795,7 +973,7 @@ const Actions = {
         }
 
         if (STATE.currentView === 'editor') {
-            UI.renderList();
+            UI.renderList(STATE.searchText);
             UI.renderGlobalStats();
         }
     },
@@ -845,6 +1023,13 @@ const UI = {
                         <input type="file" id="wb-import-file" accept=".json,.wb" style="display:none">
                     </div>
 
+                    <div class="wb-preset-strip">
+                        <select id="wb-preset-selector" style="flex:1"></select>
+                        <button class="wb-btn-rect mini" id="wb-preset-save">保存当前状态</button>
+                        <button class="wb-btn-rect mini" id="wb-preset-apply">应用状态</button>
+                        <button class="wb-btn-rect mini wb-btn-danger" id="wb-preset-delete">删除状态</button>
+                    </div>
+
                     <div class="wb-stat-line">
                         <div class="wb-stat-item" id="wb-display-count">0 条目</div>
                     </div>
@@ -853,6 +1038,21 @@ const UI = {
                         <input class="wb-input-dark" id="wb-search-entry" placeholder="搜索条目...">
                         <button class="wb-btn-circle" id="btn-sort-priority" title="按优先级重排"><i class="fa-solid fa-filter"></i></button>
                         <button class="wb-btn-circle" id="btn-add-entry" title="新建条目"><i class="fa-solid fa-plus"></i></button>
+                    </div>
+
+                    <div class="wb-batch-toolbar">
+                        <span id="wb-selection-info">已选 0/0</span>
+                        <button class="wb-btn-rect mini" id="wb-select-all">全选可见</button>
+                        <button class="wb-btn-rect mini" id="wb-select-invert">反选可见</button>
+                        <button class="wb-btn-rect mini" id="wb-select-clear">清空选择</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-enable">批量开启</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-disable">批量关闭</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-const-on">常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-const-off">非常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-order-up">顺序+1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-order-down">顺序-1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-up">深度+1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-down">深度-1</button>
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
@@ -962,6 +1162,22 @@ const UI = {
         $('#wb-btn-rename').onclick = () => Actions.actionRename();
         $('#wb-btn-delete').onclick = () => Actions.actionDelete();
 
+        $('#wb-preset-save').onclick = () => Actions.saveCurrentStatePreset();
+        $('#wb-preset-apply').onclick = () => Actions.applyStatePreset($('#wb-preset-selector').value);
+        $('#wb-preset-delete').onclick = () => Actions.deleteStatePreset($('#wb-preset-selector').value);
+
+        $('#wb-select-all').onclick = () => Actions.selectAllVisible();
+        $('#wb-select-invert').onclick = () => Actions.invertVisibleSelection();
+        $('#wb-select-clear').onclick = () => Actions.clearSelection();
+        $('#wb-batch-enable').onclick = () => Actions.batchEnable(true);
+        $('#wb-batch-disable').onclick = () => Actions.batchEnable(false);
+        $('#wb-batch-const-on').onclick = () => Actions.batchConstant(true);
+        $('#wb-batch-const-off').onclick = () => Actions.batchConstant(false);
+        $('#wb-batch-order-up').onclick = () => Actions.batchOrder(1);
+        $('#wb-batch-order-down').onclick = () => Actions.batchOrder(-1);
+        $('#wb-batch-depth-up').onclick = () => Actions.batchDepth(1);
+        $('#wb-batch-depth-down').onclick = () => Actions.batchDepth(-1);
+
         const fileInput = $('#wb-import-file');
         fileInput.onchange = (e) => {
             if (e.target.files.length > 0) {
@@ -983,6 +1199,7 @@ const UI = {
         } else {
             UI.renderList();
             UI.renderGlobalStats();
+            UI.updateSelectionInfo();
         }
 
         UI.switchView('editor');
@@ -1005,8 +1222,10 @@ const UI = {
             Actions.ensureStitchBooks().then(() => this.renderStitchView());
         } else if (viewName === 'editor') {
             this.renderBookSelector();
+            this.renderPresetBar();
             this.renderGlobalStats();
-            this.renderList(document.getElementById('wb-search-entry')?.value || '');
+            this.renderList(STATE.searchText || '');
+            this.updateSelectionInfo();
         }
     },
 
@@ -1051,6 +1270,23 @@ const UI = {
         selector.innerHTML = html;
         if (STATE.currentBookName) selector.value = STATE.currentBookName;
         this.applyCustomDropdown('wb-book-selector');
+    },
+
+    renderPresetBar() {
+        const sel = document.getElementById('wb-preset-selector');
+        if (!sel) return;
+
+        if (!STATE.currentBookName) {
+            sel.innerHTML = '<option value="">先选择世界书</option>';
+            return;
+        }
+
+        const presets = Actions.getBookPresets(STATE.currentBookName);
+        let html = '<option value="">选择状态预设...</option>';
+        presets.forEach((p) => {
+            html += `<option value="${esc(p.id)}">${esc(p.name)}</option>`;
+        });
+        sel.innerHTML = html;
     },
 
     renderBindingView() {
@@ -1201,26 +1437,36 @@ const UI = {
         if (!list) return;
         list.innerHTML = '';
 
+        STATE.searchText = filterText;
         const term = filterText.toLowerCase();
+        let shown = 0;
 
         STATE.entries.forEach((entry, index) => {
             const name = entry.comment || '';
             if (term && !name.toLowerCase().includes(term)) return;
             const card = this.createCard(entry, index);
             list.appendChild(card);
+            shown += 1;
         });
+
+        if (!shown) {
+            list.innerHTML = `<div class="wb-empty">${STATE.entries.length ? '没有匹配条目' : '当前世界书没有条目'}</div>`;
+        }
+
+        this.updateSelectionInfo();
     },
 
     createCard(entry, index) {
         const isEnabled = !entry.disable;
         const isConstant = !!entry.constant;
         const keys = entry.key || [];
+        const selected = STATE.selectedUids.has(Number(entry.uid));
 
         const card = document.createElement('div');
         let typeClass = '';
         if (isEnabled) typeClass = isConstant ? 'type-blue' : 'type-green';
 
-        card.className = `wb-card ${isEnabled ? '' : 'disabled'} ${typeClass}`;
+        card.className = `wb-card ${isEnabled ? '' : 'disabled'} ${typeClass} ${selected ? 'selected' : ''}`;
         card.dataset.uid = entry.uid;
         card.dataset.index = index;
 
@@ -1239,8 +1485,8 @@ const UI = {
 
         let optionsHtml = '';
         allPosOptions.forEach((opt) => {
-            const selected = opt.v === curPosStr ? 'selected' : '';
-            optionsHtml += `<option value="${opt.v}" ${selected}>${opt.t}</option>`;
+            const selectedOpt = opt.v === curPosStr ? 'selected' : '';
+            optionsHtml += `<option value="${opt.v}" ${selectedOpt}>${opt.t}</option>`;
         });
 
         const showWarning = isEnabled && !isConstant && !(keys.length > 0);
@@ -1252,6 +1498,7 @@ const UI = {
             <div class="wb-card-header">
                 <div class="wb-card-main">
                     <div class="wb-row">
+                        <input type="checkbox" class="wb-select-entry" ${selected ? 'checked' : ''} title="选择条目">
                         <input class="wb-inp-title inp-name" value="${esc(entry.comment)}" placeholder="条目名称">
                         <div class="wb-warning-container">${warningIcon}</div>
                         <i class="fa-solid fa-eye btn-preview" title="编辑内容"></i>
@@ -1280,6 +1527,7 @@ const UI = {
             if (el) el.addEventListener(evt, fn);
         };
 
+        bind('.wb-select-entry', 'change', (e) => Actions.selectEntry(entry.uid, e.target.checked));
         bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
         bind('.inp-enable', 'change', (e) => Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; }));
         bind('.inp-type', 'change', (e) => Actions.updateEntry(entry.uid, (d) => {
@@ -1304,12 +1552,27 @@ const UI = {
         return card;
     },
 
+    updateSelectionInfo() {
+        const info = document.getElementById('wb-selection-info');
+        if (!info) return;
+
+        const total = STATE.entries.length;
+        const selected = STATE.selectedUids.size;
+        info.textContent = `已选 ${selected}/${total}`;
+
+        document.querySelectorAll('.wb-batch-toolbar .wb-btn-rect').forEach((btn) => {
+            if (btn.id === 'wb-select-all' || btn.id === 'wb-select-invert' || btn.id === 'wb-select-clear') return;
+            btn.disabled = selected === 0;
+        });
+    },
+
     updateCardStatus(uid) {
         const entry = STATE.entries.find((e) => e.uid === uid);
         const card = document.querySelector(`.wb-card[data-uid="${uid}"]`);
         if (!entry || !card) return;
 
         card.classList.remove('disabled', 'type-green', 'type-blue');
+        card.classList.toggle('selected', STATE.selectedUids.has(Number(uid)));
 
         if (entry.disable) card.classList.add('disabled');
         else if (entry.constant) card.classList.add('type-blue');
@@ -1422,8 +1685,10 @@ const UI = {
                     if (STATE.currentBookName === bookName) {
                         STATE.currentBookName = null;
                         STATE.entries = [];
+                        STATE.selectedUids.clear();
                         UI.renderList();
                         UI.renderGlobalStats();
+                        UI.updateSelectionInfo();
                     }
 
                     await Actions.refreshAllContext();
@@ -1437,7 +1702,6 @@ const UI = {
         });
     },
 
-    // -------- Stitch UI --------
     renderStitchView() {
         const modeEl = document.getElementById('wb-stitch-mode');
         if (modeEl) {
@@ -1451,7 +1715,6 @@ const UI = {
 
     renderStitchSide(sideKey) {
         const side = sideKey === 'left' ? STATE.stitch.left : STATE.stitch.right;
-        const otherKey = sideKey === 'left' ? 'right' : 'left';
         const all = STATE.allBookNames;
 
         const bookSel = document.getElementById(`wb-stitch-${sideKey}-book`);
@@ -1521,13 +1784,8 @@ const UI = {
             };
         }
 
-        if (btnCopy) {
-            btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
-        }
-
-        if (btnMove) {
-            btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
-        }
+        if (btnCopy) btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
+        if (btnMove) btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
 
         const term = side.search.toLowerCase();
         const filteredEntries = side.entries.filter((entry) => !term || String(entry.comment || '').toLowerCase().includes(term));
@@ -1572,19 +1830,6 @@ const UI = {
                 e.dataTransfer.setData('text/uid', item.dataset.uid);
                 e.dataTransfer.setData('text/from-side', sideKey);
             });
-
-            item.ondblclick = () => {
-                const uid = Number(item.dataset.uid);
-                const target = side.entries.find((x) => Number(x.uid) === uid);
-                if (!target) return;
-                Actions.loadBook(side.book).then(() => {
-                    Actions.switchView('editor');
-                    setTimeout(() => {
-                        const card = document.querySelector(`.wb-card[data-uid="${uid}"] .btn-preview`);
-                        if (card) card.click();
-                    }, 80);
-                });
-            };
         });
 
         listEl.ondragover = (e) => {
@@ -1612,11 +1857,6 @@ const UI = {
         const pane = document.getElementById(`wb-stitch-${sideKey}-pane`);
         if (pane) {
             pane.querySelector('.wb-stitch-pane-title').textContent = `${sideKey === 'left' ? '左侧' : '右侧'}世界书（已选 ${side.selected.size}/${side.entries.length}）`;
-        }
-
-        const otherPane = document.getElementById(`wb-stitch-${otherKey}-pane`);
-        if (otherPane) {
-            otherPane.classList.remove('drag-over-pane');
         }
     },
 
