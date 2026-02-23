@@ -55,7 +55,12 @@ function cloneData(data) {
 
 function safeText(v) {
     if (v === null || v === undefined) return '';
-    return String(v).replace(/[\u0000-\u001F]/g, '');
+    return String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+}
+
+function safeContent(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/\u0000/g, '');
 }
 
 function escapeHtml(str) {
@@ -104,7 +109,7 @@ function normalizeEntry(rawEntry, uidFallback, idx) {
 
     out.uid = toNum(out.uid, toNum(uidFallback, idx));
     out.comment = safeText(out.comment ?? out.title ?? out.name ?? out.keyString ?? `条目 ${out.uid}`);
-    out.content = safeText(out.content ?? out.text ?? out.value ?? '');
+    out.content = safeContent(out.content ?? out.text ?? out.value ?? '');
     out.key = ensureArray(out.key ?? out.keys ?? out.keyword ?? out.keywords).map((k) => safeText(k)).filter(Boolean);
 
     out.position = normalizePosition(out.position);
@@ -120,6 +125,24 @@ function normalizeEntry(rawEntry, uidFallback, idx) {
     if (typeof out.selective !== 'boolean') out.selective = !out.constant;
 
     return out;
+}
+
+function fallbackEntry(rawEntry, uidFallback, idx) {
+    const uid = toNum(rawEntry?.uid, toNum(uidFallback, idx));
+    const constant = toBool(rawEntry?.constant, false);
+    return {
+        uid,
+        comment: safeText(rawEntry?.comment ?? rawEntry?.name ?? rawEntry?.title ?? `条目 ${uid}`),
+        content: safeContent(rawEntry?.content ?? ''),
+        key: ensureArray(rawEntry?.key).map((k) => safeText(k)).filter(Boolean),
+        position: normalizePosition(rawEntry?.position),
+        depth: Math.max(0, toNum(rawEntry?.depth, 4)),
+        order: toNum(rawEntry?.order, idx),
+        probability: toNum(rawEntry?.probability, 100),
+        disable: toBool(rawEntry?.disable, false),
+        constant,
+        selective: rawEntry?.selective ?? !constant,
+    };
 }
 
 function sortEntriesInPlace(entries) {
@@ -277,10 +300,17 @@ const API = {
         if (!data) throw new Error(`世界书不存在: ${name}`);
 
         const rawEntries = data.entries || {};
-        const arr = [];
+        const pairs = Array.isArray(rawEntries)
+            ? rawEntries.map((e, i) => [String(e?.uid ?? i), e])
+            : Object.entries(rawEntries);
 
-        Object.entries(rawEntries).forEach(([uidKey, rawEntry], idx) => {
-            arr.push(normalizeEntry(rawEntry, uidKey, idx));
+        const arr = [];
+        pairs.forEach(([uidKey, rawEntry], idx) => {
+            try {
+                arr.push(normalizeEntry(rawEntry, uidKey, idx));
+            } catch (_e) {
+                arr.push(fallbackEntry(rawEntry, uidKey, idx));
+            }
         });
 
         const used = new Set();
@@ -669,11 +699,9 @@ const Actions = {
         const toAdd = globalBooks.filter((n) => !currentGlobal.includes(n));
 
         for (const n of toRemove) {
-            // eslint-disable-next-line no-await-in-loop
             await setBinding('global', n, false);
         }
         for (const n of toAdd) {
-            // eslint-disable-next-line no-await-in-loop
             await setBinding('global', n, true);
         }
 
@@ -887,6 +915,7 @@ const UI = {
         this.renderManageView('');
         this.renderStats();
         this.updateSelectionInfo();
+        this.switchView('editor');
 
         const prefer = STATE.bindings.char.primary || STATE.bindings.chat || STATE.allBookNames[0];
         if (prefer) {
@@ -1026,7 +1055,14 @@ const UI = {
         }
 
         data.forEach((entry) => {
-            list.appendChild(this.createCard(entry));
+            try {
+                list.appendChild(this.createCard(entry));
+            } catch (err) {
+                const broken = document.createElement('div');
+                broken.className = 'wb-card';
+                broken.innerHTML = `<div class="wb-card-header">条目渲染失败 uid=${escapeHtml(entry?.uid)} | ${escapeHtml(err?.message || 'unknown')}</div>`;
+                list.appendChild(broken);
+            }
         });
 
         this.updateSelectionInfo();
@@ -1641,7 +1677,6 @@ const UI = {
                 if (!ids.length) return toastr.warning('请先选择条目');
 
                 for (const id of ids) {
-                    // eslint-disable-next-line no-await-in-loop
                     await transferOne(id, mode);
                 }
 
