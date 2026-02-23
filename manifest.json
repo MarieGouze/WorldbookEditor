@@ -1,28 +1,10 @@
 {
-    "display_name": "世界书管理器",
+    "display_name": "世界书管理器 V2.0.1",
     "loading_order": 10,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "",
-    "version": "2.0.0"
-
+    "author": "AI Assistant (Fixed)",
+    "version": "2.0.1"
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
