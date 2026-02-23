@@ -605,7 +605,10 @@ const UI = {
             </div>`;
         const q = (s) => card.querySelector(s);
         q('.wb-card-selector input').onchange = (e) => Actions.toggleEntrySelection(entry.uid, e.target.checked);
-        q('.inp-title').oninput = (e) => Actions.updateEntry(entry.uid, d => d.comment = e.target.value);
+        
+        // 【修复点】：将 .inp-title 改为 .wb-inp-title
+        q('.wb-inp-title').oninput = (e) => Actions.updateEntry(entry.uid, d => d.comment = e.target.value);
+        
         q('.fa-pen-to-square').onclick = () => UI.openContentPopup(entry);
         q('.inp-enable').onchange = (e) => Actions.updateEntry(entry.uid, d => d.disable = !e.target.checked);
         q('.inp-type').onchange = (e) => Actions.updateEntry(entry.uid, d => d.constant = e.target.checked);
