@@ -42,7 +42,10 @@ const STATE = {
         chat: null
     },
 
-    debouncer: null
+    debouncer: null,
+
+    // 【新功能】批量选择状态
+    selectedUids: new Set(),
 };
 
 // ST 原生位置枚举，用于 UI 转换
@@ -574,6 +577,7 @@ const Actions = {
                 if (STATE.currentBookName && !STATE.allBookNames.includes(STATE.currentBookName)) {
                     STATE.currentBookName = null;
                     STATE.entries = [];
+                    this.batchSelect('none'); // 清空选择
                     UI.renderList();
                 }
                 UI.renderBookSelector();
@@ -587,6 +591,9 @@ const Actions = {
 
         // [安全锁 1] 在切换上下文之前，绝对确保上一本书的修改已落地
         await this.flushPendingSave();
+
+        // 【新功能】清空批量选择
+        this.batchSelect('none');
 
         // 切换上下文
         STATE.currentBookName = name;
@@ -1150,7 +1157,140 @@ const Actions = {
         try {
              return getContext().getTokenCount(text);
         } catch(e) { return Math.ceil(text.length / 3); }
-    }
+    },
+    
+    //【新功能】条目状态配置
+    async saveCurrentEntryState() {
+        const stateName = prompt("请输入此条目状态配置的名称:");
+        if (!stateName || !stateName.trim()) return;
+        if (!STATE.currentBookName) return;
+
+        const enabledUids = STATE.entries.filter(e => !e.disable).map(e => e.uid);
+
+        await this.updateMeta(STATE.currentBookName, (meta) => {
+            if (!meta.entryStates) meta.entryStates = {};
+            meta.entryStates[stateName.trim()] = enabledUids;
+        });
+
+        toastr.success(`状态配置 "${stateName}" 已保存。`);
+        UI.renderEntryStatesMenu();
+    },
+
+    async applyEntryState(stateName) {
+        if (!STATE.currentBookName || !stateName) return;
+
+        const bookMeta = STATE.metadata[STATE.currentBookName];
+        const stateUids = bookMeta?.entryStates?.[stateName];
+
+        if (!stateUids) {
+            toastr.error(`未找到状态配置: ${stateName}`);
+            return;
+        }
+
+        const uidSet = new Set(stateUids);
+        let changed = false;
+        STATE.entries.forEach(entry => {
+            const shouldBeEnabled = uidSet.has(entry.uid);
+            const isEnabled = !entry.disable;
+            if (shouldBeEnabled !== isEnabled) {
+                entry.disable = !shouldBeEnabled;
+                changed = true;
+            }
+        });
+
+        if (changed) {
+            UI.renderList();
+            await API.saveBookEntries(STATE.currentBookName, STATE.entries);
+            toastr.success(`已应用状态配置: ${stateName}`);
+        } else {
+            toastr.info(`当前条目状态与 "${stateName}" 已一致。`);
+        }
+    },
+    
+    async deleteEntryState(stateName) {
+        if (!STATE.currentBookName || !stateName) return;
+
+        await this.updateMeta(STATE.currentBookName, (meta) => {
+            if (meta.entryStates && meta.entryStates[stateName]) {
+                delete meta.entryStates[stateName];
+            }
+        });
+        toastr.success(`状态配置 "${stateName}" 已删除。`);
+        UI.renderEntryStatesMenu();
+    },
+    
+    //【新功能】批量选择
+    toggleEntrySelection(uid) {
+        if (STATE.selectedUids.has(uid)) {
+            STATE.selectedUids.delete(uid);
+        } else {
+            STATE.selectedUids.add(uid);
+        }
+        UI.updateBatchControls();
+    },
+
+    batchSelect(mode) {
+        const allUids = STATE.entries.map(e => e.uid);
+        if (mode === 'all') {
+            allUids.forEach(uid => STATE.selectedUids.add(uid));
+        } else if (mode === 'none') {
+            STATE.selectedUids.clear();
+        } else if (mode === 'invert') {
+            allUids.forEach(uid => {
+                if (STATE.selectedUids.has(uid)) {
+                    STATE.selectedUids.delete(uid);
+                } else {
+                    STATE.selectedUids.add(uid);
+                }
+            });
+        }
+        UI.renderList(document.getElementById('wb-search-entry').value);
+        UI.updateBatchControls();
+    },
+
+    async batchUpdate(action, options = {}) {
+        const selectedCount = STATE.selectedUids.size;
+        if (selectedCount === 0) return;
+
+        if (action === 'delete') {
+            if (!confirm(`确定要删除选中的 ${selectedCount} 个条目吗?`)) return;
+            const uidsToDelete = Array.from(STATE.selectedUids);
+            await API.deleteEntries(STATE.currentBookName, uidsToDelete);
+            this.batchSelect('none');
+            await this.loadBook(STATE.currentBookName);
+            toastr.success(`${selectedCount} 个条目已删除。`);
+            return;
+        }
+
+        let changesMade = false;
+        const newEntries = STATE.entries.map(entry => {
+            if (STATE.selectedUids.has(entry.uid)) {
+                changesMade = true;
+                const newEntry = { ...entry };
+                switch (action) {
+                    case 'enable': newEntry.disable = false; break;
+                    case 'disable': newEntry.disable = true; break;
+                    case 'toggle-constant': newEntry.constant = !newEntry.constant; break;
+                    case 'reorder':
+                        const { posVal, depthVal, orderVal } = options;
+                        if (posVal) newEntry.position = WI_POSITION_MAP_REV[posVal] ?? newEntry.position;
+                        if (depthVal !== '' && !isNaN(depthVal)) newEntry.depth = Number(depthVal);
+                        if (orderVal !== '' && !isNaN(orderVal)) newEntry.order = Number(orderVal);
+                        break;
+                }
+                return newEntry;
+            }
+            return entry;
+        });
+
+        if (changesMade) {
+            STATE.entries = newEntries;
+            await API.saveBookEntries(STATE.currentBookName, STATE.entries);
+            toastr.success(`${selectedCount} 个条目已更新。`);
+        }
+
+        this.batchSelect('none'); // 清空选择并重绘
+    },
 };
 
 const UI = {
@@ -1266,6 +1406,26 @@ const UI = {
                     </div>
                     <div class="wb-tool-bar">
                         <input class="wb-input-dark" id="wb-search-entry" style="flex:1; width:100%; border-radius:15px; padding-left:15px;" placeholder="搜索条目...">
+                        
+                        <!-- 【新功能】批量选择按钮 -->
+                        <button class="wb-btn-circle" id="btn-select-all" title="全选所有"><i class="fa-solid fa-check-double"></i></button>
+                        <button class="wb-btn-circle" id="btn-invert-selection" title="反选"><i class="fa-solid fa-rotate"></i></button>
+                        <div class="wb-batch-op-divider hidden"></div>
+                        <span id="wb-batch-counter" class="hidden"></span>
+                        <button class="wb-btn-circle wb-batch-op hidden" id="btn-batch-enable" title="批量启用"><i class="fa-solid fa-play"></i></button>
+                        <button class="wb-btn-circle wb-batch-op hidden" id="btn-batch-disable" title="批量禁用"><i class="fa-solid fa-pause"></i></button>
+                        <button class="wb-btn-circle wb-batch-op hidden" id="btn-batch-toggle-const" title="批量切换常驻/非常驻"><i class="fa-solid fa-lightbulb"></i></button>
+                        <button class="wb-btn-circle wb-batch-op hidden" id="btn-batch-reorder" title="批量调整顺序/深度"><i class="fa-solid fa-layer-group"></i></button>
+                        <button class="wb-btn-circle wb-batch-op hidden danger" id="btn-batch-delete" title="批量删除"><i class="fa-solid fa-trash"></i></button>
+                        
+                        <!-- 【新功能】条目状态配置 -->
+                        <div class="wb-menu-wrapper">
+                            <button class="wb-btn-circle" id="btn-entry-states" title="保存/加载条目状态">
+                                <i class="fa-solid fa-bookmark"></i>
+                            </button>
+                            <div class="wb-menu-dropdown" id="wb-entry-states-menu"></div>
+                        </div>
+                        
                         <button class="wb-btn-circle interactable" id="btn-group-sort" title="分组排序管理">
                             <i class="fa-solid fa-arrow-down-9-1"></i>
                         </button>
@@ -1363,9 +1523,31 @@ const UI = {
             };
         });
 
+        // 【新功能】条目状态配置菜单
+        const statesBtn = $('#btn-entry-states');
+        const statesMenu = $('#wb-entry-states-menu');
+        statesBtn.onclick = (e) => {
+            e.stopPropagation();
+            UI.renderEntryStatesMenu();
+            const isShow = statesMenu.classList.contains('show');
+            document.querySelectorAll('.wb-menu-dropdown.show').forEach(el => el.classList.remove('show'));
+            if (!isShow) statesMenu.classList.add('show');
+        };
+
+        // 【新功能】批量选择按钮
+        $('#btn-select-all').onclick = () => Actions.batchSelect('all');
+        $('#btn-invert-selection').onclick = () => Actions.batchSelect('invert');
+        $('#btn-batch-enable').onclick = () => Actions.batchUpdate('enable');
+        $('#btn-batch-disable').onclick = () => Actions.batchUpdate('disable');
+        $('#btn-batch-toggle-const').onclick = () => Actions.batchUpdate('toggle-constant');
+        $('#btn-batch-reorder').onclick = () => UI.openBatchReorderModal();
+        $('#btn-batch-delete').onclick = () => Actions.batchUpdate('delete');
+
+
         document.addEventListener('click', (e) => {
             if (menuDropdown.classList.contains('show') && !menuTrigger.contains(e.target) && !menuDropdown.contains(e.target)) menuDropdown.classList.remove('show');
             if (analysisMenu.classList.contains('show') && !analysisBtn.contains(e.target) && !analysisMenu.contains(e.target)) analysisMenu.classList.remove('show');
+            if (statesMenu.classList.contains('show') && !statesBtn.contains(e.target) && !statesMenu.contains(e.target)) statesMenu.classList.remove('show');
         });
 
         const fileInput = $('#wb-import-file');
@@ -1530,6 +1712,14 @@ const UI = {
                             refresh();
                             Actions.saveBindings();
                         };
+                        // 【新功能】双击跳转到编辑
+                        if (dataClass === 'wb-bind-global') { // 仅为全局绑定添加
+                           tag.addEventListener('dblclick', () => {
+                                Actions.jumpToEditor(name);
+                                toastr.info(`已跳转到世界书: ${name}`);
+                           });
+                           tag.title = '双击跳转到编辑';
+                        }
                         tagsEl.appendChild(tag);
                     });
                 }
@@ -1679,6 +1869,8 @@ const UI = {
             list.appendChild(card);
             this.applyCustomDropdown(`wb-pos-${entry.uid}`);
         });
+        // 【新功能】渲染后更新批量操作按钮的状态
+        this.updateBatchControls();
     },
 
     createCard(entry, index) {
@@ -1699,6 +1891,8 @@ const UI = {
         const isEnabled = !entry.disable;
         const isConstant = !!entry.constant;
         const keys = entry.key || [];
+        //【新功能】检查条目是否被选中
+        const isSelected = STATE.selectedUids.has(entry.uid);
 
         const card = document.createElement('div');
         // 逻辑：如果禁用 -> disabled; 否则如果常驻 -> type-blue; 否则 -> type-green
@@ -1745,7 +1939,9 @@ const UI = {
 
         card.innerHTML = `
             <div class="wb-card-header">
-                <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+                <!-- 【新功能】复选框 -->
+                <input type="checkbox" class="inp-select-entry" title="选择此条目" ${isSelected ? 'checked' : ''} style="margin: 0 10px; transform: scale(1.2); flex-shrink:0;">
+                <div style="flex:1;display:flex;flex-direction:column;gap:8px; min-width:0;">
                     <div class="wb-row">
                         <!-- 绑定到 comment -->
                         <input class="wb-inp-title inp-name" value="${escapeHtml(entry.comment)}" placeholder="条目名称 (Comment)">
@@ -1771,6 +1967,9 @@ const UI = {
         `;
 
         const bind = (sel, evt, fn) => { const el = card.querySelector(sel); if(el) el.addEventListener(evt, fn); };
+        
+        // 【新功能】绑定复选框事件
+        bind('.inp-select-entry', 'change', (e) => Actions.toggleEntrySelection(entry.uid));
 
         bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, d => d.comment = e.target.value));
 
@@ -3089,7 +3288,173 @@ const UI = {
         document.body.addEventListener('touchmove', () => {
             if (touchTimer) clearTimeout(touchTimer); // 滑动则取消长按
         });
-    }
+    },
+
+    // 【新功能】系列
+    renderEntryStatesMenu() {
+        const menu = document.getElementById('wb-entry-states-menu');
+        if (!menu) return;
+
+        if (!STATE.currentBookName) {
+            menu.innerHTML = '<div class="wb-menu-item disabled" style="color:#9ca3af; cursor: not-allowed;">请先选择世界书</div>';
+            return;
+        }
+
+        const bookMeta = STATE.metadata[STATE.currentBookName] || {};
+        const states = bookMeta.entryStates || {};
+        const stateNames = Object.keys(states);
+
+        let html = `<div class="wb-menu-item" data-action="save-state"><i class="fa-solid fa-floppy-disk"></i> 保存当前状态...</div>`;
+        if (stateNames.length > 0) {
+            html += `<div class="wb-menu-item danger" data-action="manage-states"><i class="fa-solid fa-wrench"></i> 管理状态...</div>`;
+            html += `<div style="height:1px; background:#e5e7eb; margin: 4px 0;"></div>`;
+            stateNames.sort().forEach(name => {
+                html += `<div class="wb-menu-item" data-action="apply-state" data-state-name="${escape(name)}"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${name}</div>`;
+            });
+        }
+
+        menu.innerHTML = html;
+
+        menu.querySelectorAll('.wb-menu-item[data-action]').forEach(item => {
+            item.onclick = async (e) => {
+                e.stopPropagation();
+                menu.classList.remove('show');
+                const action = item.dataset.action;
+                
+                if (action === 'save-state') await Actions.saveCurrentEntryState();
+                else if (action === 'manage-states') this.openStateManagerModal();
+                else if (action === 'apply-state') {
+                    const stateName = unescape(item.dataset.stateName);
+                    await Actions.applyEntryState(stateName);
+                }
+            };
+        });
+    },
+    
+    openStateManagerModal() {
+        const bookMeta = STATE.metadata[STATE.currentBookName] || {};
+        const states = bookMeta.entryStates || {};
+        const stateNames = Object.keys(states);
+
+        const overlay = document.createElement('div');
+        overlay.className = 'wb-sort-modal-overlay';
+        
+        let listHtml = '';
+        if (stateNames.length > 0) {
+            stateNames.sort().forEach(name => {
+                listHtml += `
+                <div class="wb-warning-list-item">
+                    <span style="font-weight:bold;">${name}</span>
+                    <i class="fa-solid fa-trash" style="cursor:pointer; color:#9ca3af; padding:5px;" class="btn-del-state" title="删除此状态" data-delete-state="${escape(name)}"></i>
+                </div>`;
+            });
+        } else {
+            listHtml = `<div style="text-align:center; color:#9ca3af; padding: 20px;">无已保存的状态</div>`;
+        }
+
+        overlay.innerHTML = `
+            <div class="wb-sort-modal" style="width:400px; max-width:90vw;">
+                <div class="wb-sort-header">
+                    <span>管理状态配置</span>
+                    <div class="wb-close-modal" style="cursor:pointer;"><i class="fa-solid fa-xmark"></i></div>
+                </div>
+                <div class="wb-sort-body" style="background:#fff;">${listHtml}</div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        this.setupModalPositioning(overlay.querySelector('.wb-sort-modal'), overlay);
+
+        overlay.addEventListener('click', async (e) => {
+            const stateToDelete = e.target.dataset.deleteState;
+            if (stateToDelete) {
+                const stateName = unescape(stateToDelete);
+                if (confirm(`确定要删除状态配置 "${stateName}" 吗？`)) {
+                    await Actions.deleteEntryState(stateName);
+                    overlay.remove();
+                    this.openStateManagerModal(); // 刷新
+                }
+            }
+        });
+        
+        overlay.querySelector('.wb-close-modal').onclick = () => overlay.remove();
+        overlay.onclick = (e) => { if(e.target === overlay) overlay.remove() };
+    },
+    
+    updateBatchControls() {
+        const count = STATE.selectedUids.size;
+        const counter = document.getElementById('wb-batch-counter');
+        const ops = document.querySelectorAll('.wb-batch-op');
+        const divider = document.querySelector('.wb-batch-op-divider');
+
+        if (!counter || !ops.length || !divider) return;
+
+        if (count > 0) {
+            counter.textContent = `${count} 项已选`;
+            counter.classList.remove('hidden');
+            ops.forEach(op => op.classList.remove('hidden'));
+            divider.classList.remove('hidden');
+        } else {
+            counter.classList.add('hidden');
+            ops.forEach(op => op.classList.add('hidden'));
+            divider.classList.add('hidden');
+        }
+    },
+    
+    openBatchReorderModal() {
+        const overlay = document.createElement('div');
+        overlay.className = 'wb-sort-modal-overlay';
+        overlay.innerHTML = `
+            <div class="wb-sort-modal" style="width:400px; max-width:90vw;">
+                <div class="wb-sort-header"><span>批量调整位置</span><div class="wb-close-modal" style="cursor:pointer;"><i class="fa-solid fa-xmark"></i></div></div>
+                <div class="wb-sort-body" style="background:#fff; display:flex; flex-direction:column; gap:15px; padding:20px;">
+                    <div>
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.9em;">位置</label>
+                        <select id="batch-pos-select" class="wb-input-dark" style="width:100%"></select>
+                    </div>
+                    <div>
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.9em;">深度 (Depth)</label>
+                        <input type="number" id="batch-depth-input" class="wb-input-dark" style="width:100%" placeholder="留空则不修改">
+                    </div>
+                     <div>
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.9em;">顺序 (Order)</label>
+                        <input type="number" id="batch-order-input" class="wb-input-dark" style="width:100%" placeholder="留空则不修改">
+                    </div>
+                </div>
+                <div class="wb-sort-footer" style="display:flex; justify-content:flex-end; gap:10px;">
+                    <button id="batch-reorder-cancel" class="wb-btn-black" style="background:#6b7280;">取消</button>
+                    <button id="batch-reorder-apply" class="wb-btn-black">应用</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        this.setupModalPositioning(overlay.querySelector('.wb-sort-modal'), overlay);
+        
+        const allPosOptions = [
+            { v: 'before_character_definition', t: '角色定义之前' }, { v: 'after_character_definition', t: '角色定义之后' },
+            { v: 'before_example_messages', t: '示例消息之前' }, { v: 'after_example_messages', t: '示例消息之后' },
+            { v: 'before_author_note', t: `作者注释之前` }, { v: 'after_author_note', t: `作者注释之后` },
+            { v: 'at_depth', t: '@D' }
+        ];
+
+        const posSelect = overlay.querySelector('#batch-pos-select');
+        let optionsHtml = '<option value="">-- 不更改 --</option>';
+        allPosOptions.forEach(opt => {
+            optionsHtml += `<option value="${opt.v}">${opt.t}</option>`;
+        });
+        posSelect.innerHTML = optionsHtml;
+
+        overlay.querySelector('#batch-reorder-cancel').onclick = () => overlay.remove();
+        overlay.querySelector('.wb-close-modal').onclick = () => overlay.remove();
+        overlay.querySelector('#batch-reorder-apply').onclick = () => {
+            const posVal = posSelect.value;
+            const depthVal = overlay.querySelector('#batch-depth-input').value;
+            const orderVal = overlay.querySelector('#batch-order-input').value;
+            Actions.batchUpdate('reorder', { posVal, depthVal, orderVal });
+            overlay.remove();
+        };
+    },
 };
 
 /**
