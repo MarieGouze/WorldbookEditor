@@ -23,7 +23,7 @@ const STATE = {
     allBookNames: [],
     metadata: {},
     boundBooksSet: {},
-    searchText: '',
+    editorSearch: '',
     selectedUids: new Set(),
     bindings: {
         char: { primary: null, additional: [] },
@@ -84,15 +84,6 @@ function normalizeEntry(raw, uidKey, index) {
     entry.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : index;
     entry.selective = typeof entry.selective === 'boolean' ? entry.selective : !entry.constant;
     return entry;
-}
-
-function sortByOrder(entries) {
-    entries.sort((a, b) => {
-        const oa = Number(a.order ?? 0);
-        const ob = Number(b.order ?? 0);
-        if (oa !== ob) return oa - ob;
-        return Number(a.uid ?? 0) - Number(b.uid ?? 0);
-    });
 }
 
 async function charUpdatePrimaryWorld(name) {
@@ -231,8 +222,7 @@ const API = {
             arr.push(normalizeEntry(entry, uidKey, idx));
         });
 
-        sortByOrder(arr);
-        return arr;
+        return arr.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     },
 
     async saveBookEntries(name, entriesArray) {
@@ -355,6 +345,7 @@ const Actions = {
 
     queueSave() {
         if (STATE.debouncer) clearTimeout(STATE.debouncer);
+
         const targetBookName = STATE.currentBookName;
         const targetEntries = STATE.entries;
 
@@ -439,8 +430,8 @@ const Actions = {
             STATE.metadata = API.getMetadata();
 
             UI.renderBookSelector();
-            UI.renderPresetBar();
             UI.renderBindingView();
+            UI.renderPresetBar();
             if (STATE.currentView === 'manage') UI.renderManageView();
             if (STATE.currentView === 'stitch') UI.renderStitchView();
         } catch (e) {
@@ -476,7 +467,7 @@ const Actions = {
             UI.renderBookSelector();
             UI.renderPresetBar();
             UI.renderGlobalStats();
-            UI.renderList('');
+            UI.renderList(STATE.editorSearch || '');
             UI.updateSelectionInfo();
         } catch (e) {
             if (STATE.currentBookName === name) {
@@ -522,8 +513,8 @@ const Actions = {
 
     async deleteEntry(uid) {
         if (!confirm('确定要删除此条目吗？')) return;
+        STATE.selectedUids.delete(Number(uid));
         await API.deleteEntries(STATE.currentBookName, [uid]);
-        STATE.selectedUids.delete(uid);
         await this.loadBook(STATE.currentBookName);
     },
 
@@ -540,15 +531,134 @@ const Actions = {
             return a.uid - b.uid;
         });
 
-        UI.renderList(STATE.searchText);
+        UI.renderList(STATE.editorSearch);
         API.saveBookEntries(STATE.currentBookName, STATE.entries);
         toastr.success('已按优先级重排');
     },
 
-    // ---------- 预设 ----------
+    // ---------- 多选批量 ----------
+    getVisibleEntries() {
+        const term = String(STATE.editorSearch || '').toLowerCase().trim();
+        return STATE.entries.filter((e) => {
+            if (!term) return true;
+            return String(e.comment || '').toLowerCase().includes(term);
+        });
+    },
+
+    selectEntry(uid, checked) {
+        const id = Number(uid);
+        if (checked) STATE.selectedUids.add(id);
+        else STATE.selectedUids.delete(id);
+        UI.updateSelectionInfo();
+        const card = document.querySelector(`.wb-card[data-uid="${id}"]`);
+        if (card) card.classList.toggle('selected', checked);
+    },
+
+    selectAllVisible() {
+        this.getVisibleEntries().forEach((e) => STATE.selectedUids.add(Number(e.uid)));
+        UI.renderList(STATE.editorSearch);
+    },
+
+    invertVisibleSelection() {
+        this.getVisibleEntries().forEach((e) => {
+            const uid = Number(e.uid);
+            if (STATE.selectedUids.has(uid)) STATE.selectedUids.delete(uid);
+            else STATE.selectedUids.add(uid);
+        });
+        UI.renderList(STATE.editorSearch);
+    },
+
+    clearSelection() {
+        STATE.selectedUids.clear();
+        UI.renderList(STATE.editorSearch);
+    },
+
+    getSelectedEntries() {
+        return STATE.entries.filter((e) => STATE.selectedUids.has(Number(e.uid)));
+    },
+
+    batchMutate(mutator) {
+        const selected = this.getSelectedEntries();
+        if (!selected.length) {
+            toastr.warning('请先选择条目');
+            return false;
+        }
+
+        selected.forEach((entry) => mutator(entry));
+        UI.renderList(STATE.editorSearch);
+        UI.renderGlobalStats();
+        this.queueSave();
+        return true;
+    },
+
+    batchEnable(value) {
+        this.batchMutate((entry) => {
+            entry.disable = !value;
+        });
+    },
+
+    batchConstant(value) {
+        this.batchMutate((entry) => {
+            entry.constant = !!value;
+            entry.selective = !entry.constant;
+        });
+    },
+
+    batchSetPosition(posKey) {
+        const posVal = WI_POSITION_MAP_REV[posKey];
+        if (posVal === undefined) {
+            toastr.warning('请选择有效位置');
+            return;
+        }
+
+        this.batchMutate((entry) => {
+            entry.position = posVal;
+        });
+    },
+
+    batchSetDepth(depthValue) {
+        const depth = Number(depthValue);
+        if (!Number.isFinite(depth) || depth < 0) {
+            toastr.warning('深度请输入 >= 0 的数字');
+            return;
+        }
+
+        this.batchMutate((entry) => {
+            entry.depth = depth;
+        });
+    },
+
+    batchSetOrder(startOrderValue) {
+        const start = Number(startOrderValue);
+        if (!Number.isFinite(start)) {
+            toastr.warning('顺序请输入数字');
+            return;
+        }
+
+        const selected = this.getSelectedEntries();
+        if (!selected.length) {
+            toastr.warning('请先选择条目');
+            return;
+        }
+
+        selected
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid)
+            .forEach((entry, idx) => {
+                entry.order = start + idx;
+            });
+
+        STATE.entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid);
+
+        UI.renderList(STATE.editorSearch);
+        UI.renderGlobalStats();
+        this.queueSave();
+    },
+
+    // ---------- 单书状态预设 ----------
     getPresetStore() {
-        if (!STATE.metadata || typeof STATE.metadata !== 'object') STATE.metadata = {};
-        if (!STATE.metadata[CONFIG.presetStoreKey]) STATE.metadata[CONFIG.presetStoreKey] = {};
+        if (!STATE.metadata[CONFIG.presetStoreKey]) {
+            STATE.metadata[CONFIG.presetStoreKey] = {};
+        }
         return STATE.metadata[CONFIG.presetStoreKey];
     },
 
@@ -557,157 +667,102 @@ const Actions = {
         return Array.isArray(store[bookName]) ? store[bookName] : [];
     },
 
-    async saveCurrentStatePreset() {
-        if (!STATE.currentBookName) return toastr.warning('请先选择一本世界书');
+    async saveCurrentPreset() {
+        if (!STATE.currentBookName) {
+            toastr.warning('请先选择世界书');
+            return;
+        }
 
         const defaultName = `状态_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
-        const name = prompt('输入状态名称:', defaultName);
+        const name = prompt('输入状态名称：', defaultName);
         if (!name) return;
 
+        const list = this.getBookPresets(STATE.currentBookName);
         const snapshot = {};
+
         STATE.entries.forEach((entry) => {
             snapshot[entry.uid] = {
                 disable: !!entry.disable,
                 constant: !!entry.constant,
+                position: Number(entry.position ?? 1),
                 order: Number(entry.order ?? 0),
                 depth: Number(entry.depth ?? 4),
-                position: Number(entry.position ?? 1),
             };
         });
 
-        const store = this.getPresetStore();
-        const list = this.getBookPresets(STATE.currentBookName);
-
+        const existsIndex = list.findIndex((p) => p.name === name);
         const preset = {
-            id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             name,
             snapshot,
             updatedAt: Date.now(),
         };
 
-        const existedIdx = list.findIndex((p) => p.name === name);
-        if (existedIdx >= 0) list[existedIdx] = preset;
+        if (existsIndex >= 0) list[existsIndex] = preset;
         else list.push(preset);
 
+        const store = this.getPresetStore();
         store[STATE.currentBookName] = list;
         STATE.metadata[CONFIG.presetStoreKey] = store;
-        await API.saveMetadata(STATE.metadata);
 
+        await API.saveMetadata(STATE.metadata);
         UI.renderPresetBar();
-        toastr.success(`已保存状态: ${name}`);
+        toastr.success(`已保存状态：${name}`);
     },
 
-    async applyStatePreset(presetId) {
-        if (!STATE.currentBookName) return;
-        if (!presetId) return toastr.warning('请先选择状态预设');
+    async applyPreset(presetId) {
+        if (!STATE.currentBookName || !presetId) {
+            toastr.warning('请选择一个状态');
+            return;
+        }
 
         const list = this.getBookPresets(STATE.currentBookName);
         const preset = list.find((p) => p.id === presetId);
-        if (!preset) return toastr.warning('状态预设不存在');
+        if (!preset) {
+            toastr.warning('状态不存在');
+            return;
+        }
 
-        const snap = preset.snapshot || {};
+        const snapshot = preset.snapshot || {};
         STATE.entries.forEach((entry) => {
-            const item = snap[entry.uid];
-            if (!item) return;
-            entry.disable = !!item.disable;
-            entry.constant = !!item.constant;
-            entry.order = Number(item.order ?? entry.order ?? 0);
-            entry.depth = Math.max(0, Number(item.depth ?? entry.depth ?? 4));
-            entry.position = Number(item.position ?? entry.position ?? 1);
+            const snap = snapshot[entry.uid];
+            if (!snap) return;
+            entry.disable = !!snap.disable;
+            entry.constant = !!snap.constant;
             entry.selective = !entry.constant;
+            entry.position = Number.isFinite(Number(snap.position)) ? Number(snap.position) : entry.position;
+            entry.order = Number.isFinite(Number(snap.order)) ? Number(snap.order) : entry.order;
+            entry.depth = Number.isFinite(Number(snap.depth)) ? Number(snap.depth) : entry.depth;
         });
 
-        sortByOrder(STATE.entries);
-        UI.renderList(STATE.searchText);
+        STATE.entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid);
+
+        UI.renderList(STATE.editorSearch);
         UI.renderGlobalStats();
-        await API.saveBookEntries(STATE.currentBookName, STATE.entries);
-        toastr.success(`已切换状态: ${preset.name}`);
+        this.queueSave();
+        toastr.success(`已切换到状态：${preset.name}`);
     },
 
-    async deleteStatePreset(presetId) {
-        if (!STATE.currentBookName) return;
-        if (!presetId) return toastr.warning('请先选择状态预设');
+    async deletePreset(presetId) {
+        if (!STATE.currentBookName || !presetId) {
+            toastr.warning('请选择要删除的状态');
+            return;
+        }
 
-        const store = this.getPresetStore();
         const list = this.getBookPresets(STATE.currentBookName);
         const idx = list.findIndex((p) => p.id === presetId);
         if (idx < 0) return;
 
-        if (!confirm(`删除状态预设 "${list[idx].name}" ?`)) return;
+        if (!confirm(`确定删除状态 "${list[idx].name}" 吗？`)) return;
 
         list.splice(idx, 1);
+        const store = this.getPresetStore();
         store[STATE.currentBookName] = list;
         STATE.metadata[CONFIG.presetStoreKey] = store;
+
         await API.saveMetadata(STATE.metadata);
-
         UI.renderPresetBar();
-        toastr.success('状态预设已删除');
-    },
-
-    // ---------- 多选/批量 ----------
-    selectEntry(uid, checked) {
-        const id = Number(uid);
-        if (checked) STATE.selectedUids.add(id);
-        else STATE.selectedUids.delete(id);
-        UI.updateSelectionInfo();
-    },
-
-    selectAllVisible() {
-        document.querySelectorAll('#wb-entry-list .wb-card[data-uid]').forEach((el) => {
-            STATE.selectedUids.add(Number(el.dataset.uid));
-        });
-        UI.renderList(STATE.searchText);
-    },
-
-    invertVisibleSelection() {
-        document.querySelectorAll('#wb-entry-list .wb-card[data-uid]').forEach((el) => {
-            const uid = Number(el.dataset.uid);
-            if (STATE.selectedUids.has(uid)) STATE.selectedUids.delete(uid);
-            else STATE.selectedUids.add(uid);
-        });
-        UI.renderList(STATE.searchText);
-    },
-
-    clearSelection() {
-        STATE.selectedUids.clear();
-        UI.renderList(STATE.searchText);
-    },
-
-    batchUpdate(updater) {
-        if (!STATE.selectedUids.size) return toastr.warning('请先勾选条目');
-
-        STATE.entries.forEach((entry) => {
-            if (STATE.selectedUids.has(Number(entry.uid))) updater(entry);
-        });
-
-        UI.renderList(STATE.searchText);
-        UI.renderGlobalStats();
-        this.queueSave();
-    },
-
-    batchEnable(flag) {
-        this.batchUpdate((entry) => { entry.disable = !flag; });
-    },
-
-    batchConstant(flag) {
-        this.batchUpdate((entry) => {
-            entry.constant = !!flag;
-            entry.selective = !entry.constant;
-        });
-    },
-
-    batchOrder(delta) {
-        const d = Number(delta);
-        if (!Number.isFinite(d) || d === 0) return;
-        this.batchUpdate((entry) => { entry.order = Number(entry.order ?? 0) + d; });
-        sortByOrder(STATE.entries);
-        UI.renderList(STATE.searchText);
-    },
-
-    batchDepth(delta) {
-        const d = Number(delta);
-        if (!Number.isFinite(d) || d === 0) return;
-        this.batchUpdate((entry) => { entry.depth = Math.max(0, Number(entry.depth ?? 4) + d); });
+        toastr.success('状态已删除');
     },
 
     async saveBindings() {
@@ -855,6 +910,7 @@ const Actions = {
             STATE.currentBookName = null;
             STATE.entries = [];
             STATE.selectedUids.clear();
+
             await this.refreshAllContext();
             UI.renderList();
             UI.renderGlobalStats();
@@ -973,7 +1029,7 @@ const Actions = {
         }
 
         if (STATE.currentView === 'editor') {
-            UI.renderList(STATE.searchText);
+            UI.renderList(STATE.editorSearch);
             UI.renderGlobalStats();
         }
     },
@@ -1023,15 +1079,15 @@ const UI = {
                         <input type="file" id="wb-import-file" accept=".json,.wb" style="display:none">
                     </div>
 
-                    <div class="wb-preset-strip">
-                        <select id="wb-preset-selector" style="flex:1"></select>
-                        <button class="wb-btn-rect mini" id="wb-preset-save">保存当前状态</button>
-                        <button class="wb-btn-rect mini" id="wb-preset-apply">应用状态</button>
-                        <button class="wb-btn-rect mini wb-btn-danger" id="wb-preset-delete">删除状态</button>
-                    </div>
-
                     <div class="wb-stat-line">
                         <div class="wb-stat-item" id="wb-display-count">0 条目</div>
+                    </div>
+
+                    <div class="wb-preset-strip">
+                        <select id="wb-preset-selector" style="flex:1"></select>
+                        <button class="wb-btn-rect mini" id="wb-preset-save">保存状态</button>
+                        <button class="wb-btn-rect mini" id="wb-preset-apply">应用状态</button>
+                        <button class="wb-btn-rect mini wb-btn-danger" id="wb-preset-delete">删除状态</button>
                     </div>
 
                     <div class="wb-tool-bar">
@@ -1042,17 +1098,31 @@ const UI = {
 
                     <div class="wb-batch-toolbar">
                         <span id="wb-selection-info">已选 0/0</span>
-                        <button class="wb-btn-rect mini" id="wb-select-all">全选可见</button>
-                        <button class="wb-btn-rect mini" id="wb-select-invert">反选可见</button>
+                        <button class="wb-btn-rect mini" id="wb-select-all">全选(可见)</button>
+                        <button class="wb-btn-rect mini" id="wb-select-invert">反选(可见)</button>
                         <button class="wb-btn-rect mini" id="wb-select-clear">清空选择</button>
                         <button class="wb-btn-rect mini" id="wb-batch-enable">批量开启</button>
                         <button class="wb-btn-rect mini" id="wb-batch-disable">批量关闭</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-const-on">常驻</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-const-off">非常驻</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-order-up">顺序+1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-order-down">顺序-1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-depth-up">深度+1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-depth-down">深度-1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-constant-on">设常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-constant-off">设非常驻</button>
+
+                        <select id="wb-batch-position" class="wb-batch-select">
+                            <option value="">批量位置...</option>
+                            <option value="before_character_definition">角色定义之前</option>
+                            <option value="after_character_definition">角色定义之后</option>
+                            <option value="before_author_note">作者注释之前</option>
+                            <option value="after_author_note">作者注释之后</option>
+                            <option value="at_depth">@D</option>
+                            <option value="before_example_messages">示例消息之前</option>
+                            <option value="after_example_messages">示例消息之后</option>
+                        </select>
+                        <button class="wb-btn-rect mini" id="wb-batch-position-apply">应用位置</button>
+
+                        <input type="number" id="wb-batch-order" class="wb-batch-num" placeholder="顺序起始值">
+                        <button class="wb-btn-rect mini" id="wb-batch-order-apply">应用顺序</button>
+
+                        <input type="number" min="0" id="wb-batch-depth" class="wb-batch-num" placeholder="深度值">
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-apply">应用深度</button>
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
@@ -1162,21 +1232,28 @@ const UI = {
         $('#wb-btn-rename').onclick = () => Actions.actionRename();
         $('#wb-btn-delete').onclick = () => Actions.actionDelete();
 
-        $('#wb-preset-save').onclick = () => Actions.saveCurrentStatePreset();
-        $('#wb-preset-apply').onclick = () => Actions.applyStatePreset($('#wb-preset-selector').value);
-        $('#wb-preset-delete').onclick = () => Actions.deleteStatePreset($('#wb-preset-selector').value);
+        $('#wb-preset-save').onclick = () => Actions.saveCurrentPreset();
+        $('#wb-preset-apply').onclick = () => Actions.applyPreset($('#wb-preset-selector').value);
+        $('#wb-preset-delete').onclick = () => Actions.deletePreset($('#wb-preset-selector').value);
 
         $('#wb-select-all').onclick = () => Actions.selectAllVisible();
         $('#wb-select-invert').onclick = () => Actions.invertVisibleSelection();
         $('#wb-select-clear').onclick = () => Actions.clearSelection();
+
         $('#wb-batch-enable').onclick = () => Actions.batchEnable(true);
         $('#wb-batch-disable').onclick = () => Actions.batchEnable(false);
-        $('#wb-batch-const-on').onclick = () => Actions.batchConstant(true);
-        $('#wb-batch-const-off').onclick = () => Actions.batchConstant(false);
-        $('#wb-batch-order-up').onclick = () => Actions.batchOrder(1);
-        $('#wb-batch-order-down').onclick = () => Actions.batchOrder(-1);
-        $('#wb-batch-depth-up').onclick = () => Actions.batchDepth(1);
-        $('#wb-batch-depth-down').onclick = () => Actions.batchDepth(-1);
+        $('#wb-batch-constant-on').onclick = () => Actions.batchConstant(true);
+        $('#wb-batch-constant-off').onclick = () => Actions.batchConstant(false);
+
+        $('#wb-batch-position-apply').onclick = () => {
+            Actions.batchSetPosition($('#wb-batch-position').value);
+        };
+        $('#wb-batch-order-apply').onclick = () => {
+            Actions.batchSetOrder($('#wb-batch-order').value);
+        };
+        $('#wb-batch-depth-apply').onclick = () => {
+            Actions.batchSetDepth($('#wb-batch-depth').value);
+        };
 
         const fileInput = $('#wb-import-file');
         fileInput.onchange = (e) => {
@@ -1199,7 +1276,7 @@ const UI = {
         } else {
             UI.renderList();
             UI.renderGlobalStats();
-            UI.updateSelectionInfo();
+            UI.renderPresetBar();
         }
 
         UI.switchView('editor');
@@ -1224,7 +1301,7 @@ const UI = {
             this.renderBookSelector();
             this.renderPresetBar();
             this.renderGlobalStats();
-            this.renderList(STATE.searchText || '');
+            this.renderList(STATE.editorSearch || '');
             this.updateSelectionInfo();
         }
     },
@@ -1281,9 +1358,9 @@ const UI = {
             return;
         }
 
-        const presets = Actions.getBookPresets(STATE.currentBookName);
+        const list = Actions.getBookPresets(STATE.currentBookName);
         let html = '<option value="">选择状态预设...</option>';
-        presets.forEach((p) => {
+        list.forEach((p) => {
             html += `<option value="${esc(p.id)}">${esc(p.name)}</option>`;
         });
         sel.innerHTML = html;
@@ -1437,21 +1514,24 @@ const UI = {
         if (!list) return;
         list.innerHTML = '';
 
-        STATE.searchText = filterText;
-        const term = filterText.toLowerCase();
-        let shown = 0;
+        STATE.editorSearch = filterText;
+        const term = filterText.toLowerCase().trim();
 
-        STATE.entries.forEach((entry, index) => {
-            const name = entry.comment || '';
-            if (term && !name.toLowerCase().includes(term)) return;
-            const card = this.createCard(entry, index);
-            list.appendChild(card);
-            shown += 1;
+        const filtered = STATE.entries.filter((entry) => {
+            if (!term) return true;
+            return String(entry.comment || '').toLowerCase().includes(term);
         });
 
-        if (!shown) {
-            list.innerHTML = `<div class="wb-empty">${STATE.entries.length ? '没有匹配条目' : '当前世界书没有条目'}</div>`;
+        if (!filtered.length) {
+            list.innerHTML = '<div class="wb-empty">没有匹配条目</div>';
+            this.updateSelectionInfo();
+            return;
         }
+
+        filtered.forEach((entry, index) => {
+            const card = this.createCard(entry, index);
+            list.appendChild(card);
+        });
 
         this.updateSelectionInfo();
     },
@@ -1498,7 +1578,7 @@ const UI = {
             <div class="wb-card-header">
                 <div class="wb-card-main">
                     <div class="wb-row">
-                        <input type="checkbox" class="wb-select-entry" ${selected ? 'checked' : ''} title="选择条目">
+                        <input type="checkbox" class="wb-select-dot inp-select" ${selected ? 'checked' : ''} title="选择条目">
                         <input class="wb-inp-title inp-name" value="${esc(entry.comment)}" placeholder="条目名称">
                         <div class="wb-warning-container">${warningIcon}</div>
                         <i class="fa-solid fa-eye btn-preview" title="编辑内容"></i>
@@ -1527,7 +1607,7 @@ const UI = {
             if (el) el.addEventListener(evt, fn);
         };
 
-        bind('.wb-select-entry', 'change', (e) => Actions.selectEntry(entry.uid, e.target.checked));
+        bind('.inp-select', 'change', (e) => Actions.selectEntry(entry.uid, e.target.checked));
         bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
         bind('.inp-enable', 'change', (e) => Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; }));
         bind('.inp-type', 'change', (e) => Actions.updateEntry(entry.uid, (d) => {
@@ -1555,15 +1635,7 @@ const UI = {
     updateSelectionInfo() {
         const info = document.getElementById('wb-selection-info');
         if (!info) return;
-
-        const total = STATE.entries.length;
-        const selected = STATE.selectedUids.size;
-        info.textContent = `已选 ${selected}/${total}`;
-
-        document.querySelectorAll('.wb-batch-toolbar .wb-btn-rect').forEach((btn) => {
-            if (btn.id === 'wb-select-all' || btn.id === 'wb-select-invert' || btn.id === 'wb-select-clear') return;
-            btn.disabled = selected === 0;
-        });
+        info.textContent = `已选 ${STATE.selectedUids.size}/${STATE.entries.length}`;
     },
 
     updateCardStatus(uid) {
@@ -1572,7 +1644,6 @@ const UI = {
         if (!entry || !card) return;
 
         card.classList.remove('disabled', 'type-green', 'type-blue');
-        card.classList.toggle('selected', STATE.selectedUids.has(Number(uid)));
 
         if (entry.disable) card.classList.add('disabled');
         else if (entry.constant) card.classList.add('type-blue');
@@ -1580,6 +1651,8 @@ const UI = {
 
         const tokenEl = card.querySelector('.wb-token-display');
         if (tokenEl) tokenEl.textContent = Actions.getTokenCount(entry.content);
+
+        card.classList.toggle('selected', STATE.selectedUids.has(Number(uid)));
     },
 
     openContentPopup(entry) {
@@ -1702,6 +1775,7 @@ const UI = {
         });
     },
 
+    // -------- Stitch UI --------
     renderStitchView() {
         const modeEl = document.getElementById('wb-stitch-mode');
         if (modeEl) {
@@ -1784,8 +1858,13 @@ const UI = {
             };
         }
 
-        if (btnCopy) btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
-        if (btnMove) btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
+        if (btnCopy) {
+            btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
+        }
+
+        if (btnMove) {
+            btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
+        }
 
         const term = side.search.toLowerCase();
         const filteredEntries = side.entries.filter((entry) => !term || String(entry.comment || '').toLowerCase().includes(term));
@@ -1795,8 +1874,8 @@ const UI = {
         } else {
             listEl.innerHTML = filteredEntries.map((entry) => {
                 const selected = side.selected.has(Number(entry.uid)) ? 'checked' : '';
-                const mode = entry.constant ? '常驻' : '非常驻';
                 const modeClass = entry.constant ? 'mode-blue' : 'mode-green';
+                const mode = entry.constant ? '常驻' : '非常驻';
                 const enabledText = entry.disable ? '关闭' : '启用';
                 return `
                     <div class="wb-stitch-item" draggable="true" data-side="${sideKey}" data-uid="${entry.uid}">
@@ -1830,6 +1909,17 @@ const UI = {
                 e.dataTransfer.setData('text/uid', item.dataset.uid);
                 e.dataTransfer.setData('text/from-side', sideKey);
             });
+
+            item.ondblclick = () => {
+                const uid = Number(item.dataset.uid);
+                Actions.loadBook(side.book).then(() => {
+                    Actions.switchView('editor');
+                    setTimeout(() => {
+                        const btn = document.querySelector(`.wb-card[data-uid="${uid}"] .btn-preview`);
+                        if (btn) btn.click();
+                    }, 80);
+                });
+            };
         });
 
         listEl.ondragover = (e) => {
