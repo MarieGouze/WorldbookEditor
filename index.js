@@ -29,7 +29,6 @@ const STATE = {
         global: [],
         chat: null,
     },
-    debugMessages: [],
 };
 
 const WI_POSITION_MAP = {
@@ -56,7 +55,7 @@ function cloneData(data) {
 
 function safeText(v) {
     if (v === null || v === undefined) return '';
-    return String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+    return String(v).replace(/[\u0000-\u001F]/g, '');
 }
 
 function escapeHtml(str) {
@@ -84,22 +83,9 @@ function toBool(v, fallback = false) {
 function ensureArray(v) {
     if (Array.isArray(v)) return v;
     if (typeof v === 'string') {
-        return v
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
+        return v.split(',').map((s) => s.trim()).filter(Boolean);
     }
     return [];
-}
-
-function pushDebug(message, errorObj = null) {
-    const line = `[${new Date().toLocaleTimeString()}] ${message}${errorObj ? ` | ${errorObj.message || String(errorObj)}` : ''}`;
-    STATE.debugMessages.push(line);
-    if (STATE.debugMessages.length > 200) {
-        STATE.debugMessages = STATE.debugMessages.slice(-120);
-    }
-    console.warn('[Enhanced WB]', line, errorObj || '');
-    UI.renderDebug();
 }
 
 function normalizePosition(rawPos) {
@@ -117,43 +103,21 @@ function normalizeEntry(rawEntry, uidFallback, idx) {
     const out = { ...src };
 
     out.uid = toNum(out.uid, toNum(uidFallback, idx));
-
-    out.comment = safeText(
-        out.comment
-        ?? out.title
-        ?? out.name
-        ?? out.keyString
-        ?? `条目 ${out.uid}`,
-    );
-
-    out.content = safeText(
-        out.content
-        ?? out.text
-        ?? out.value
-        ?? '',
-    );
-
-    const keyList = ensureArray(out.key ?? out.keys ?? out.keyword ?? out.keywords);
-    out.key = keyList.map((k) => safeText(k)).filter(Boolean);
+    out.comment = safeText(out.comment ?? out.title ?? out.name ?? out.keyString ?? `条目 ${out.uid}`);
+    out.content = safeText(out.content ?? out.text ?? out.value ?? '');
+    out.key = ensureArray(out.key ?? out.keys ?? out.keyword ?? out.keywords).map((k) => safeText(k)).filter(Boolean);
 
     out.position = normalizePosition(out.position);
     out.depth = Math.max(0, toNum(out.depth, 4));
     out.order = toNum(out.order, idx);
     out.probability = toNum(out.probability, 100);
 
-    if (typeof out.disable === 'boolean') {
-        out.disable = out.disable;
-    } else if (out.enabled !== undefined) {
-        out.disable = !toBool(out.enabled, true);
-    } else {
-        out.disable = false;
-    }
+    if (typeof out.disable === 'boolean') out.disable = out.disable;
+    else if (out.enabled !== undefined) out.disable = !toBool(out.enabled, true);
+    else out.disable = false;
 
     out.constant = toBool(out.constant, false);
-
-    if (typeof out.selective !== 'boolean') {
-        out.selective = !out.constant;
-    }
+    if (typeof out.selective !== 'boolean') out.selective = !out.constant;
 
     return out;
 }
@@ -267,11 +231,8 @@ async function setBinding(type, worldName, enabled) {
     }
 
     if (type === 'chat') {
-        if (enabled && worldName) {
-            context.chatMetadata.world_info = worldName;
-        } else {
-            delete context.chatMetadata.world_info;
-        }
+        if (enabled && worldName) context.chatMetadata.world_info = worldName;
+        else delete context.chatMetadata.world_info;
         context.saveMetadataDebounced?.();
         return;
     }
@@ -319,14 +280,9 @@ const API = {
         const arr = [];
 
         Object.entries(rawEntries).forEach(([uidKey, rawEntry], idx) => {
-            try {
-                arr.push(normalizeEntry(rawEntry, uidKey, idx));
-            } catch (e) {
-                pushDebug(`条目解析失败 book=${name} uid=${uidKey}`, e);
-            }
+            arr.push(normalizeEntry(rawEntry, uidKey, idx));
         });
 
-        // UID 去重，避免重复 UID 导致操作错乱
         const used = new Set();
         arr.forEach((e, i) => {
             let uid = toNum(e.uid, i);
@@ -337,11 +293,6 @@ const API = {
 
         sortEntriesInPlace(arr);
         normalizeOrder(arr);
-
-        if (Object.keys(rawEntries).length && arr.length === 0) {
-            pushDebug(`世界书 ${name} 有条目，但解析结果为空（可能字段格式异常）`);
-        }
-
         return arr;
     },
 
@@ -406,27 +357,13 @@ const Actions = {
         const es = eventSource;
         const et = event_types;
 
-        es.on(et.SETTINGS_UPDATED, () => {
-            this.refreshContext().catch((e) => pushDebug('SETTINGS_UPDATED 刷新失败', e));
-        });
-
-        es.on(et.CHARACTER_SELECTED, () => {
-            setTimeout(() => {
-                this.refreshContext().catch((e) => pushDebug('CHARACTER_SELECTED 刷新失败', e));
-            }, 100);
-        });
-
-        es.on(et.CHAT_CHANGED, () => {
-            this.refreshContext().catch((e) => pushDebug('CHAT_CHANGED 刷新失败', e));
-        });
+        es.on(et.SETTINGS_UPDATED, () => this.refreshContext().catch(console.error));
+        es.on(et.CHAT_CHANGED, () => this.refreshContext().catch(console.error));
+        es.on(et.CHARACTER_SELECTED, () => setTimeout(() => this.refreshContext().catch(console.error), 120));
 
         es.on(et.WORLDINFO_UPDATED, async (name) => {
             if (name && name === STATE.currentBookName) {
-                try {
-                    await this.loadBook(name);
-                } catch (e) {
-                    pushDebug(`WORLDINFO_UPDATED 加载失败: ${name}`, e);
-                }
+                await this.loadBook(name);
             }
         });
     },
@@ -450,7 +387,6 @@ const Actions = {
             UI.renderBindingView();
             UI.renderManageView(document.getElementById('wb-manage-search')?.value || '');
             UI.renderPresetBar();
-            UI.renderDebug();
         }
     },
 
@@ -472,10 +408,7 @@ const Actions = {
         STATE.debouncer = setTimeout(() => {
             STATE.debouncer = null;
             if (targetName && Array.isArray(targetEntries)) {
-                API.saveBookEntries(targetName, targetEntries).catch((e) => {
-                    pushDebug(`保存失败: ${targetName}`, e);
-                    toastr.error(`保存失败: ${targetName}`);
-                });
+                API.saveBookEntries(targetName, targetEntries).catch(console.error);
             }
         }, 260);
     },
@@ -491,7 +424,7 @@ const Actions = {
         try {
             STATE.entries = await API.loadBook(name);
         } catch (e) {
-            pushDebug(`加载世界书失败: ${name}`, e);
+            console.error(e);
             STATE.entries = [];
             toastr.error(`加载失败: ${name}`);
         }
@@ -500,7 +433,7 @@ const Actions = {
         UI.renderPresetBar();
         UI.renderEntryList('');
         UI.renderStats();
-        UI.renderDebug();
+        UI.updateSelectionInfo();
     },
 
     getEntry(uidVal) {
@@ -517,11 +450,9 @@ const Actions = {
     },
 
     async addEntry() {
-        if (!STATE.currentBookName) {
-            toastr.warning('请先选择一本世界书');
-            return;
-        }
+        if (!STATE.currentBookName) return toastr.warning('请先选择一本世界书');
         const maxUid = STATE.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1);
+
         const item = normalizeEntry({
             uid: maxUid + 1,
             comment: '新建条目',
@@ -583,10 +514,7 @@ const Actions = {
     },
 
     batchUpdate(fn) {
-        if (!STATE.selectedUids.size) {
-            toastr.warning('请先勾选条目');
-            return;
-        }
+        if (!STATE.selectedUids.size) return;
         STATE.entries.forEach((e) => {
             if (STATE.selectedUids.has(Number(e.uid))) fn(e);
         });
@@ -634,10 +562,7 @@ const Actions = {
     },
 
     async saveCurrentPreset() {
-        if (!STATE.currentBookName) {
-            toastr.warning('请先选择世界书');
-            return;
-        }
+        if (!STATE.currentBookName) return toastr.warning('请先选择世界书');
 
         const defaultName = `预设_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
         const name = prompt('输入预设名称：', defaultName);
@@ -657,7 +582,7 @@ const Actions = {
             };
         });
 
-        const index = list.findIndex((p) => p.name === name);
+        const idx = list.findIndex((p) => p.name === name);
         const preset = {
             id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
             name,
@@ -665,13 +590,12 @@ const Actions = {
             updatedAt: Date.now(),
         };
 
-        if (index >= 0) list[index] = preset;
+        if (idx >= 0) list[idx] = preset;
         else list.push(preset);
 
         store[STATE.currentBookName] = list;
         STATE.metadata[CONFIG.presetStoreKey] = store;
         await API.saveMetadata(STATE.metadata);
-
         UI.renderPresetBar();
         toastr.success(`已保存预设：${name}`);
     },
@@ -723,15 +647,12 @@ const Actions = {
         if (!view) return;
 
         const primary = view.querySelector('#wb-bind-char-primary')?.value || '';
+        const charAddTags = view.querySelectorAll('.wb-ms-tag[data-bind-type="wb-bind-char-add"]');
+        const globalTags = view.querySelectorAll('.wb-ms-tag[data-bind-type="wb-bind-global"]');
         const chat = view.querySelector('#wb-bind-chat')?.value || '';
 
-        const additional = Array.from(
-            view.querySelectorAll('#wb-bind-char-selected .wb-bind-selected-item'),
-        ).map((el) => el.dataset.val).filter(Boolean);
-
-        const globalBooks = Array.from(
-            view.querySelectorAll('#wb-bind-global-selected .wb-bind-selected-item'),
-        ).map((el) => el.dataset.val).filter(Boolean);
+        const additional = Array.from(charAddTags).map((el) => el.dataset.val).filter(Boolean);
+        const globalBooks = Array.from(globalTags).map((el) => el.dataset.val).filter(Boolean);
 
         await setBinding('primary', primary, !!primary);
 
@@ -761,16 +682,12 @@ const Actions = {
         await this.refreshContext();
         UI.renderBindingView();
         UI.renderBookSelector();
-        toastr.success('绑定已保存');
     },
 
     async createBook() {
         const name = prompt('请输入新世界书名称：');
         if (!name) return;
-        if (STATE.allBookNames.includes(name)) {
-            toastr.warning('名称已存在');
-            return;
-        }
+        if (STATE.allBookNames.includes(name)) return toastr.warning('名称已存在');
         await API.createWorldbook(name);
         await this.refreshContext();
         await this.loadBook(name);
@@ -780,10 +697,7 @@ const Actions = {
         if (!STATE.currentBookName) return;
         const newName = prompt('重命名为：', STATE.currentBookName);
         if (!newName || newName === STATE.currentBookName) return;
-        if (STATE.allBookNames.includes(newName)) {
-            toastr.warning('目标名称已存在');
-            return;
-        }
+        if (STATE.allBookNames.includes(newName)) return toastr.warning('目标名称已存在');
 
         await this.flushPendingSave();
         const old = STATE.currentBookName;
@@ -813,8 +727,7 @@ const Actions = {
     },
 
     async jumpToEditor(name) {
-        if (!name) return;
-        if (!STATE.allBookNames.includes(name)) return;
+        if (!name || !STATE.allBookNames.includes(name)) return;
         await this.loadBook(name);
         UI.switchView('editor');
     },
@@ -830,6 +743,7 @@ const UI = {
             <div class="wb-header-bar">
                 <div class="wb-tabs">
                     <div class="wb-tab active" data-tab="editor">编辑世界书</div>
+                    <div class="wb-tab" data-tab="stitch">缝合世界书</div>
                     <div class="wb-tab" data-tab="binding">绑定世界书</div>
                     <div class="wb-tab" data-tab="manage">管理世界书</div>
                 </div>
@@ -837,26 +751,25 @@ const UI = {
             </div>
 
             <div class="wb-content">
-                <div id="wb-debug-box" class="wb-hidden" style="margin-bottom:8px;border:1px solid #f1c6a8;background:#fff6ef;color:#7a3f18;border-radius:10px;padding:8px;"></div>
-
                 <div id="wb-view-editor" class="wb-view-section">
                     <div class="wb-book-bar">
-                        <select id="wb-book-selector" style="flex:1"></select>
+                        <div style="position:relative;flex:1;">
+                            <select id="wb-book-selector" style="width:100%;"></select>
+                        </div>
                         <button class="wb-btn-circle" id="wb-btn-new" title="新建世界书"><i class="fa-solid fa-plus"></i></button>
                         <button class="wb-btn-circle" id="wb-btn-rename" title="重命名"><i class="fa-solid fa-pen"></i></button>
                         <button class="wb-btn-circle" id="wb-btn-delete" title="删除世界书"><i class="fa-solid fa-trash"></i></button>
-                        <button class="wb-btn-circle" id="wb-btn-stitch" title="缝合世界书"><i class="fa-solid fa-object-group"></i></button>
                     </div>
 
-                    <div class="wb-stat-line" style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                        <div id="wb-stat" style="font-size:12px;color:#5b708a;font-weight:700;">0 条目 | 0 Tokens (0 + 0)</div>
+                    <div class="wb-stat-line">
+                        <div id="wb-stat">0 条目 | 0 Tokens (0 + 0)</div>
                     </div>
 
                     <div class="wb-preset-strip" id="wb-preset-strip">
                         <select id="wb-preset-selector" style="flex:1"></select>
-                        <button class="wb-btn-rect" id="wb-preset-save" style="padding:6px 12px;font-size:12px;">保存当前状态</button>
-                        <button class="wb-btn-rect" id="wb-preset-apply" style="padding:6px 12px;font-size:12px;">应用</button>
-                        <button class="wb-btn-rect" id="wb-preset-delete" style="padding:6px 12px;font-size:12px;background:#e35151;">删除</button>
+                        <button class="wb-btn-rect" id="wb-preset-save">保存当前状态</button>
+                        <button class="wb-btn-rect" id="wb-preset-apply">应用</button>
+                        <button class="wb-btn-rect danger" id="wb-preset-delete">删除</button>
                     </div>
 
                     <div class="wb-tool-bar">
@@ -864,19 +777,19 @@ const UI = {
                         <button class="wb-btn-circle" id="wb-btn-add-entry" title="新增条目"><i class="fa-solid fa-plus"></i></button>
                     </div>
 
-                    <div class="wb-batch-toolbar">
+                    <div id="wb-batch-toolbar" class="wb-batch-toolbar wb-hidden">
                         <span id="wb-selection-info">已选 0/0</span>
-                        <button class="wb-btn-rect" id="wb-select-all" style="padding:5px 10px;font-size:12px;">全选</button>
-                        <button class="wb-btn-rect" id="wb-select-invert" style="padding:5px 10px;font-size:12px;">反选</button>
-                        <button class="wb-btn-rect" id="wb-select-clear" style="padding:5px 10px;font-size:12px;">清空</button>
-                        <button class="wb-btn-rect" id="wb-batch-enable" style="padding:5px 10px;font-size:12px;">批量开启</button>
-                        <button class="wb-btn-rect" id="wb-batch-disable" style="padding:5px 10px;font-size:12px;">批量关闭</button>
-                        <button class="wb-btn-rect" id="wb-batch-const-on" style="padding:5px 10px;font-size:12px;">常驻</button>
-                        <button class="wb-btn-rect" id="wb-batch-const-off" style="padding:5px 10px;font-size:12px;">非常驻</button>
-                        <button class="wb-btn-rect" id="wb-batch-order-up" style="padding:5px 10px;font-size:12px;">顺序+1</button>
-                        <button class="wb-btn-rect" id="wb-batch-order-down" style="padding:5px 10px;font-size:12px;">顺序-1</button>
-                        <button class="wb-btn-rect" id="wb-batch-depth-up" style="padding:5px 10px;font-size:12px;">深度+1</button>
-                        <button class="wb-btn-rect" id="wb-batch-depth-down" style="padding:5px 10px;font-size:12px;">深度-1</button>
+                        <button class="wb-btn-rect mini" id="wb-select-all">全选</button>
+                        <button class="wb-btn-rect mini" id="wb-select-invert">反选</button>
+                        <button class="wb-btn-rect mini" id="wb-select-clear">清空</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-enable">批量开启</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-disable">批量关闭</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-const-on">常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-const-off">非常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-order-up">顺序+1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-order-down">顺序-1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-up">深度+1</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-down">深度-1</button>
                     </div>
 
                     <div id="wb-entry-list" class="wb-list"></div>
@@ -885,34 +798,24 @@ const UI = {
                 <div id="wb-view-binding" class="wb-view-section wb-hidden">
                     <div class="wb-bind-grid">
                         <div class="wb-bind-card">
-                            <div class="wb-bind-title">角色主世界书</div>
-                            <select id="wb-bind-char-primary"></select>
-                            <div style="font-size:12px;color:#6a7f98;">双击当前选择可直接跳转编辑</div>
+                            <div class="wb-bind-title">角色世界书</div>
+                            <div class="wb-bind-label">主要世界书</div>
+                            <div style="position:relative;"><select id="wb-bind-char-primary" style="width:100%"></select></div>
+                            <div class="wb-bind-label">附加世界书</div>
+                            <div class="wb-scroll-list" id="wb-bind-char-list"></div>
                         </div>
 
                         <div class="wb-bind-card">
-                            <div class="wb-bind-title">角色附加世界书（仅显示已启用）</div>
-                            <div id="wb-bind-char-selected" class="wb-scroll-list"></div>
-                            <div style="font-size:12px;color:#6a7f98;">从下方下拉添加（支持搜索）</div>
-                            <input id="wb-bind-char-add-search" class="wb-input-dark" placeholder="搜索要添加的世界书...">
-                            <select id="wb-bind-char-add-selector"></select>
-                        </div>
-
-                        <div class="wb-bind-card">
-                            <div class="wb-bind-title">全局世界书（仅显示已启用）</div>
-                            <div id="wb-bind-global-selected" class="wb-scroll-list"></div>
-                            <div style="font-size:12px;color:#6a7f98;">从下方下拉添加（支持搜索）</div>
-                            <input id="wb-bind-global-add-search" class="wb-input-dark" placeholder="搜索要添加的世界书...">
-                            <select id="wb-bind-global-add-selector"></select>
+                            <div class="wb-bind-title">全局世界书</div>
+                            <div class="wb-scroll-list" id="wb-bind-global-list"></div>
                         </div>
 
                         <div class="wb-bind-card">
                             <div class="wb-bind-title">聊天世界书</div>
-                            <select id="wb-bind-chat"></select>
-                            <div style="font-size:12px;color:#6a7f98;">双击当前选择可直接跳转编辑</div>
+                            <div style="position:relative;"><select id="wb-bind-chat" style="width:100%"></select></div>
                         </div>
                     </div>
-                    <div style="display:flex;justify-content:center;margin-top:12px;">
+                    <div class="wb-bind-actions">
                         <button class="wb-btn-rect" id="wb-bind-save">保存绑定</button>
                     </div>
                 </div>
@@ -936,15 +839,21 @@ const UI = {
         };
 
         $$('.wb-tab').forEach((t) => {
-            t.onclick = () => this.switchView(t.dataset.tab);
+            t.onclick = () => {
+                const tab = t.dataset.tab;
+                if (tab === 'stitch') {
+                    this.openStitchModal();
+                    return;
+                }
+                this.switchView(tab);
+            };
         });
 
-        $('#wb-book-selector').onchange = (e) => Actions.loadBook(e.target.value);
+        $('#wb-book-selector').addEventListener('change', (e) => Actions.loadBook(e.target.value));
         $('#wb-btn-new').onclick = () => Actions.createBook();
         $('#wb-btn-rename').onclick = () => Actions.renameBook();
         $('#wb-btn-delete').onclick = () => Actions.deleteBook();
         $('#wb-btn-add-entry').onclick = () => Actions.addEntry();
-        $('#wb-btn-stitch').onclick = () => this.openStitchModal();
 
         $('#wb-search-entry').oninput = (e) => this.renderEntryList(e.target.value || '');
 
@@ -964,7 +873,10 @@ const UI = {
         $('#wb-preset-apply').onclick = () => Actions.applyPreset($('#wb-preset-selector').value);
         $('#wb-preset-delete').onclick = () => Actions.deletePreset($('#wb-preset-selector').value);
 
-        $('#wb-bind-save').onclick = () => Actions.saveBindings();
+        $('#wb-bind-save').onclick = async () => {
+            await Actions.saveBindings();
+            toastr.success('绑定已保存');
+        };
 
         $('#wb-manage-search').oninput = (e) => this.renderManageView(e.target.value || '');
 
@@ -974,60 +886,14 @@ const UI = {
         this.renderBindingView();
         this.renderManageView('');
         this.renderStats();
-        this.renderDebug();
+        this.updateSelectionInfo();
 
         const prefer = STATE.bindings.char.primary || STATE.bindings.chat || STATE.allBookNames[0];
         if (prefer) {
             Actions.loadBook(prefer).catch((err) => {
-                pushDebug(`初始加载失败: ${prefer}`, err);
+                console.error(err);
                 toastr.error('加载世界书失败');
             });
-        }
-    },
-
-    renderDebug() {
-        const box = document.getElementById('wb-debug-box');
-        if (!box) return;
-
-        if (!STATE.debugMessages.length) {
-            box.classList.add('wb-hidden');
-            box.innerHTML = '';
-            return;
-        }
-
-        const latest = STATE.debugMessages.slice(-6);
-        box.classList.remove('wb-hidden');
-        box.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-                <strong>解析警告（${STATE.debugMessages.length}）</strong>
-                <div style="display:flex;gap:6px;">
-                    <button id="wb-debug-copy" class="wb-btn-rect" style="padding:4px 10px;font-size:12px;">复制日志</button>
-                    <button id="wb-debug-clear" class="wb-btn-rect" style="padding:4px 10px;font-size:12px;background:#b76a36;">清空</button>
-                </div>
-            </div>
-            <div style="margin-top:6px;font-size:12px;line-height:1.45;max-height:120px;overflow:auto;white-space:pre-wrap;">${escapeHtml(latest.join('\n'))}</div>
-        `;
-
-        const copyBtn = document.getElementById('wb-debug-copy');
-        const clearBtn = document.getElementById('wb-debug-clear');
-
-        if (copyBtn) {
-            copyBtn.onclick = async () => {
-                const text = STATE.debugMessages.join('\n');
-                try {
-                    await navigator.clipboard.writeText(text);
-                    toastr.success('日志已复制');
-                } catch (_e) {
-                    prompt('复制失败，请手动复制：', text);
-                }
-            };
-        }
-
-        if (clearBtn) {
-            clearBtn.onclick = () => {
-                STATE.debugMessages = [];
-                this.renderDebug();
-            };
         }
     },
 
@@ -1039,6 +905,7 @@ const UI = {
         panel.querySelectorAll('.wb-tab').forEach((t) => {
             t.classList.toggle('active', t.dataset.tab === viewName);
         });
+
         panel.querySelectorAll('.wb-view-section').forEach((v) => v.classList.add('wb-hidden'));
         panel.querySelector(`#wb-view-${viewName}`)?.classList.remove('wb-hidden');
 
@@ -1049,6 +916,7 @@ const UI = {
             this.renderPresetBar();
             this.renderEntryList(STATE.searchText || '');
             this.renderStats();
+            this.updateSelectionInfo();
         }
     },
 
@@ -1063,7 +931,7 @@ const UI = {
         let html = '';
 
         if (char.primary) {
-            html += '<optgroup label="主世界书">';
+            html += '<optgroup label="主要世界书">';
             html += `<option value="${escapeHtml(char.primary)}">${escapeHtml(char.primary)}</option>`;
             html += '</optgroup>';
         }
@@ -1091,15 +959,15 @@ const UI = {
             html += '</optgroup>';
         }
 
-        const others = STATE.allBookNames.filter((n) => !charSet.has(n) && !globalSet.has(n) && n !== chat);
         html += '<optgroup label="其他">';
-        others.forEach((n) => {
+        STATE.allBookNames.forEach((n) => {
             html += `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`;
         });
         html += '</optgroup>';
 
         selector.innerHTML = html;
         if (STATE.currentBookName) selector.value = STATE.currentBookName;
+        this.applyCustomDropdown('wb-book-selector');
     },
 
     renderStats() {
@@ -1139,8 +1007,8 @@ const UI = {
         STATE.searchText = filterText;
         const list = document.getElementById('wb-entry-list');
         if (!list) return;
-        list.innerHTML = '';
 
+        list.innerHTML = '';
         const term = String(filterText || '').toLowerCase().trim();
 
         const data = STATE.entries.filter((e) => {
@@ -1150,9 +1018,7 @@ const UI = {
 
         if (!data.length) {
             const empty = document.createElement('div');
-            empty.style.padding = '14px';
-            empty.style.color = '#7c90a7';
-            empty.style.fontSize = '13px';
+            empty.className = 'wb-empty';
             empty.textContent = STATE.entries.length ? '没有匹配条目' : '当前世界书没有条目';
             list.appendChild(empty);
             this.updateSelectionInfo();
@@ -1160,35 +1026,19 @@ const UI = {
         }
 
         data.forEach((entry) => {
-            try {
-                list.appendChild(this.createCard(entry));
-            } catch (e) {
-                pushDebug(`渲染条目失败 uid=${entry?.uid}`, e);
-                list.appendChild(this.createBrokenCard(entry, e));
-            }
+            list.appendChild(this.createCard(entry));
         });
 
         this.updateSelectionInfo();
     },
 
-    createBrokenCard(entry, err) {
-        const card = document.createElement('div');
-        card.className = 'wb-card';
-        card.style.borderLeft = '4px solid #df8d4f';
-        card.innerHTML = `
-            <div class="wb-card-header">
-                <div style="font-size:12px;color:#b15e2c;font-weight:700;">条目渲染失败</div>
-                <div style="font-size:12px;color:#6c7d92;margin-top:4px;">uid: ${escapeHtml(entry?.uid ?? 'unknown')}</div>
-                <div style="font-size:12px;color:#6c7d92;margin-top:2px;">${escapeHtml(err?.message || String(err))}</div>
-            </div>
-        `;
-        return card;
-    },
-
     updateSelectionInfo() {
-        const el = document.getElementById('wb-selection-info');
-        if (!el) return;
-        el.textContent = `已选 ${STATE.selectedUids.size}/${STATE.entries.length}`;
+        const info = document.getElementById('wb-selection-info');
+        const bar = document.getElementById('wb-batch-toolbar');
+        if (!info || !bar) return;
+
+        info.textContent = `已选 ${STATE.selectedUids.size}/${STATE.entries.length}`;
+        bar.classList.toggle('wb-hidden', STATE.selectedUids.size === 0);
     },
 
     createCard(entry) {
@@ -1209,83 +1059,51 @@ const UI = {
         const card = document.createElement('div');
         card.className = `wb-card ${enabled ? '' : 'disabled'} ${constant ? 'type-blue' : 'type-green'}`;
         card.dataset.uid = String(entry.uid);
-        card.style.display = 'block';
-        card.style.minHeight = '82px';
 
         card.innerHTML = `
             <div class="wb-card-header">
                 <div style="display:flex;flex-direction:column;gap:8px;">
                     <div class="wb-row">
-                        <input type="checkbox" class="wb-select-entry" title="多选">
-                        <input class="wb-inp-title inp-name" placeholder="条目名称">
-                        <span class="wb-token-display"></span>
+                        <input type="checkbox" class="wb-select-entry" ${selected ? 'checked' : ''} title="选择">
+                        <input class="wb-inp-title inp-name" value="${escapeHtml(entry.comment || '')}" placeholder="条目名称">
+                        <span class="wb-token-display">${tokenCount(entry.content || '')}</span>
                         <i class="fa-solid fa-eye btn-edit" title="编辑内容"></i>
                         <i class="fa-solid fa-trash btn-delete" title="删除条目"></i>
                     </div>
                     <div class="wb-row">
                         <label class="wb-switch" title="启用/禁用">
-                            <input type="checkbox" class="inp-enable">
+                            <input type="checkbox" class="inp-enable" ${enabled ? 'checked' : ''}>
                             <span class="wb-slider purple"></span>
                         </label>
                         <label class="wb-switch" title="常驻/非常驻">
-                            <input type="checkbox" class="inp-constant">
+                            <input type="checkbox" class="inp-constant" ${constant ? 'checked' : ''}>
                             <span class="wb-slider blue"></span>
                         </label>
-                        <select class="wb-input-dark inp-pos"></select>
-                        <input type="number" class="wb-inp-num inp-depth" title="深度">
-                        <input type="number" class="wb-inp-num inp-order" title="顺序">
-                        <span class="wb-pos-label" style="font-size:12px;color:#6b7f98;min-width:95px;text-align:right;"></span>
+                        <select class="wb-input-dark inp-pos">
+                            ${posOptions.map(([v, t]) => `<option value="${v}" ${v === (WI_POSITION_MAP[toNum(entry.position, 1)] || 'after_character_definition') ? 'selected' : ''}>${t}</option>`).join('')}
+                        </select>
+                        <input type="number" class="wb-inp-num inp-depth" value="${toNum(entry.depth, 4)}" title="深度">
+                        <input type="number" class="wb-inp-num inp-order" value="${toNum(entry.order, 0)}" title="顺序">
+                        <span class="wb-pos-label">${escapeHtml(getPosLabel(entry))}</span>
                     </div>
                 </div>
             </div>
         `;
 
-        const inpSelect = card.querySelector('.wb-select-entry');
-        const inpName = card.querySelector('.inp-name');
-        const tokenEl = card.querySelector('.wb-token-display');
-        const inpEnable = card.querySelector('.inp-enable');
-        const inpConstant = card.querySelector('.inp-constant');
-        const inpPos = card.querySelector('.inp-pos');
-        const inpDepth = card.querySelector('.inp-depth');
-        const inpOrder = card.querySelector('.inp-order');
-        const posLabel = card.querySelector('.wb-pos-label');
+        const bind = (selector, evt, fn) => {
+            const el = card.querySelector(selector);
+            if (el) el.addEventListener(evt, fn);
+        };
 
-        inpSelect.checked = selected;
-        inpName.value = safeText(entry.comment || '');
-        tokenEl.textContent = String(tokenCount(entry.content || ''));
-        inpEnable.checked = enabled;
-        inpConstant.checked = constant;
+        bind('.wb-select-entry', 'change', (e) => Actions.select(entry.uid, e.target.checked));
+        bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
 
-        posOptions.forEach(([v, t]) => {
-            const op = document.createElement('option');
-            op.value = v;
-            op.textContent = t;
-            inpPos.appendChild(op);
-        });
-
-        const posStr = WI_POSITION_MAP[toNum(entry.position, 1)] || 'after_character_definition';
-        inpPos.value = posStr;
-
-        inpDepth.value = String(toNum(entry.depth, 4));
-        inpOrder.value = String(toNum(entry.order, 0));
-        posLabel.textContent = getPosLabel(entry);
-
-        inpSelect.addEventListener('change', (e) => Actions.select(entry.uid, e.target.checked));
-
-        inpName.addEventListener('input', (e) => {
-            Actions.updateEntry(entry.uid, (d) => {
-                d.comment = e.target.value;
-            });
-        });
-
-        inpEnable.addEventListener('change', (e) => {
-            Actions.updateEntry(entry.uid, (d) => {
-                d.disable = !e.target.checked;
-            });
+        bind('.inp-enable', 'change', (e) => {
+            Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; });
             this.renderEntryList(STATE.searchText);
         });
 
-        inpConstant.addEventListener('change', (e) => {
+        bind('.inp-constant', 'change', (e) => {
             Actions.updateEntry(entry.uid, (d) => {
                 d.constant = !!e.target.checked;
                 d.selective = !d.constant;
@@ -1293,28 +1111,26 @@ const UI = {
             this.renderEntryList(STATE.searchText);
         });
 
-        inpPos.addEventListener('change', (e) => {
+        bind('.inp-pos', 'change', (e) => {
             Actions.updateEntry(entry.uid, (d) => {
                 d.position = WI_POSITION_MAP_REV[e.target.value] ?? 1;
             });
-            posLabel.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
+            const label = card.querySelector('.wb-pos-label');
+            if (label) label.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
         });
 
-        inpDepth.addEventListener('input', (e) => {
-            Actions.updateEntry(entry.uid, (d) => {
-                d.depth = Math.max(0, toNum(e.target.value, 0));
-            });
-            posLabel.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
+        bind('.inp-depth', 'input', (e) => {
+            Actions.updateEntry(entry.uid, (d) => { d.depth = Math.max(0, toNum(e.target.value, 0)); });
+            const label = card.querySelector('.wb-pos-label');
+            if (label) label.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
         });
 
-        inpOrder.addEventListener('input', (e) => {
-            Actions.updateEntry(entry.uid, (d) => {
-                d.order = toNum(e.target.value, 0);
-            });
+        bind('.inp-order', 'input', (e) => {
+            Actions.updateEntry(entry.uid, (d) => { d.order = toNum(e.target.value, 0); });
         });
 
-        card.querySelector('.btn-delete').addEventListener('click', () => Actions.deleteEntry(entry.uid));
-        card.querySelector('.btn-edit').addEventListener('click', () => this.openContentPopup(entry));
+        bind('.btn-delete', 'click', () => Actions.deleteEntry(entry.uid));
+        bind('.btn-edit', 'click', () => this.openContentPopup(entry));
 
         return card;
     },
@@ -1328,9 +1144,9 @@ const UI = {
         overlay.className = 'wb-modal-overlay';
         overlay.innerHTML = `
             <div class="wb-content-popup">
-                <div class="wb-popup-header"></div>
-                <input class="wb-popup-input-keys" placeholder="关键词（英文逗号分隔）">
-                <textarea class="wb-popup-textarea" placeholder="内容..."></textarea>
+                <div class="wb-popup-header">${escapeHtml(entry.comment || '条目')}</div>
+                <input class="wb-popup-input-keys" placeholder="关键词（英文逗号分隔）" value="${escapeHtml(ensureArray(entry.key).join(','))}">
+                <textarea class="wb-popup-textarea" placeholder="内容...">${escapeHtml(entry.content || '')}</textarea>
                 <div class="wb-popup-footer">
                     <button class="wb-btn-black btn-cancel">取消</button>
                     <button class="wb-btn-black btn-save">保存</button>
@@ -1339,13 +1155,8 @@ const UI = {
         `;
         document.body.appendChild(overlay);
 
-        const header = overlay.querySelector('.wb-popup-header');
         const keyInput = overlay.querySelector('.wb-popup-input-keys');
         const textarea = overlay.querySelector('.wb-popup-textarea');
-
-        header.textContent = safeText(entry.comment || '条目');
-        keyInput.value = ensureArray(entry.key).join(',');
-        textarea.value = safeText(entry.content || '');
 
         const close = () => overlay.remove();
 
@@ -1353,10 +1164,7 @@ const UI = {
         overlay.querySelector('.btn-save').onclick = () => {
             Actions.updateEntry(entry.uid, (d) => {
                 d.content = textarea.value;
-                d.key = keyInput.value
-                    .split(',')
-                    .map((v) => v.trim())
-                    .filter(Boolean);
+                d.key = keyInput.value.split(',').map((v) => v.trim()).filter(Boolean);
             });
             this.renderEntryList(STATE.searchText);
             this.renderStats();
@@ -1368,106 +1176,127 @@ const UI = {
         };
     },
 
-    buildSelectOptions(all, selectedValue = '', includeEmpty = true) {
-        let html = includeEmpty ? '<option value="">(无)</option>' : '';
-        all.forEach((name) => {
-            const sel = name === selectedValue ? 'selected' : '';
-            html += `<option value="${escapeHtml(name)}" ${sel}>${escapeHtml(name)}</option>`;
-        });
-        return html;
-    },
-
-    filterAddSelector(selectEl, allNames, selectedSet, keyword) {
-        const k = safeText(keyword).toLowerCase().trim();
-        const candidates = allNames.filter((name) => !selectedSet.has(name));
-        const finalList = k ? candidates.filter((n) => n.toLowerCase().includes(k)) : candidates;
-
-        let html = '<option value="">选择要添加的世界书...</option>';
-        finalList.forEach((n) => {
-            html += `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`;
-        });
-        selectEl.innerHTML = html;
-    },
-
-    renderBindingSelectedList(container, names, onRemove, onJump) {
-        container.innerHTML = '';
-        if (!names.length) {
-            container.innerHTML = '<div style="font-size:12px;color:#8599b3;padding:8px;">暂无启用项</div>';
-            return;
-        }
-
-        names.forEach((name) => {
-            const row = document.createElement('div');
-            row.className = 'wb-bind-selected-item';
-            row.dataset.val = name;
-            row.style.display = 'flex';
-            row.style.alignItems = 'center';
-            row.style.justifyContent = 'space-between';
-            row.style.gap = '8px';
-            row.style.padding = '7px 8px';
-            row.style.marginBottom = '6px';
-            row.style.borderRadius = '8px';
-            row.style.background = '#ffffff';
-            row.style.border = '1px solid #dfe8f4';
-            row.style.cursor = 'pointer';
-
-            const text = document.createElement('span');
-            text.style.whiteSpace = 'nowrap';
-            text.style.overflow = 'hidden';
-            text.style.textOverflow = 'ellipsis';
-            text.style.flex = '1';
-            text.textContent = name;
-
-            const actions = document.createElement('span');
-            actions.style.display = 'flex';
-            actions.style.alignItems = 'center';
-            actions.style.gap = '6px';
-
-            const jump = document.createElement('i');
-            jump.className = 'fa-solid fa-eye wb-bind-jump';
-            jump.title = '双击打开';
-
-            const remove = document.createElement('i');
-            remove.className = 'fa-solid fa-xmark wb-bind-remove';
-            remove.title = '移除';
-
-            actions.appendChild(jump);
-            actions.appendChild(remove);
-            row.appendChild(text);
-            row.appendChild(actions);
-
-            row.ondblclick = () => onJump(name);
-            jump.ondblclick = (e) => {
-                e.stopPropagation();
-                onJump(name);
-            };
-            remove.onclick = (e) => {
-                e.stopPropagation();
-                onRemove(name);
-            };
-
-            container.appendChild(row);
-        });
-    },
-
     renderBindingView() {
+        const allNames = STATE.allBookNames;
+        const { char, global, chat } = STATE.bindings;
         const view = document.getElementById('wb-view-binding');
         if (!view) return;
 
-        const all = STATE.allBookNames;
-        const { char, global, chat } = STATE.bindings;
+        const createOpts = (selectedVal) => {
+            let html = '<option value="">(无)</option>';
+            allNames.forEach((name) => {
+                const sel = name === selectedVal ? 'selected' : '';
+                html += `<option value="${escapeHtml(name)}" ${sel}>${escapeHtml(name)}</option>`;
+            });
+            return html;
+        };
+
+        const createMultiSelect = (containerSelector, initialSelectedArray, dataClass) => {
+            const container = view.querySelector(containerSelector);
+            if (!container) return;
+
+            container.innerHTML = '';
+            container.className = 'wb-multi-select';
+
+            const selectedSet = new Set((initialSelectedArray || []).filter((n) => allNames.includes(n)));
+            const dom = document.createElement('div');
+            dom.innerHTML = `
+                <div class="wb-ms-tags"></div>
+                <div class="wb-ms-dropdown">
+                    <div class="wb-ms-search"><input type="text" placeholder="搜索选项..."></div>
+                    <div class="wb-ms-list"></div>
+                </div>
+            `;
+            container.appendChild(dom);
+
+            const tagsEl = dom.querySelector('.wb-ms-tags');
+            const dropEl = dom.querySelector('.wb-ms-dropdown');
+            const inputEl = dom.querySelector('input');
+            const listEl = dom.querySelector('.wb-ms-list');
+
+            const filterList = (term) => {
+                const lower = String(term || '').toLowerCase();
+                listEl.querySelectorAll('.wb-ms-item').forEach((item) => {
+                    item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(lower));
+                });
+            };
+
+            const refresh = () => {
+                tagsEl.innerHTML = '';
+                if (selectedSet.size === 0) {
+                    tagsEl.innerHTML = '<div class="wb-ms-placeholder">点击选择世界书...</div>';
+                } else {
+                    selectedSet.forEach((name) => {
+                        const tag = document.createElement('div');
+                        tag.className = 'wb-ms-tag';
+                        tag.dataset.val = name;
+                        tag.dataset.bindType = dataClass;
+                        tag.innerHTML = `<span>${escapeHtml(name)}</span><span class="wb-ms-tag-close">x</span>`;
+
+                        tag.ondblclick = () => {
+                            Actions.jumpToEditor(name);
+                        };
+
+                        tag.querySelector('.wb-ms-tag-close').onclick = (e) => {
+                            e.stopPropagation();
+                            selectedSet.delete(name);
+                            refresh();
+                            Actions.saveBindings().catch(console.error);
+                        };
+
+                        tagsEl.appendChild(tag);
+                    });
+                }
+
+                listEl.innerHTML = '';
+                const available = allNames.filter((n) => !selectedSet.has(n));
+                if (!available.length) {
+                    listEl.innerHTML = '<div class="wb-ms-empty">没有更多选项</div>';
+                } else {
+                    available.forEach((name) => {
+                        const item = document.createElement('div');
+                        item.className = 'wb-ms-item';
+                        item.textContent = name;
+                        item.onclick = () => {
+                            selectedSet.add(name);
+                            inputEl.value = '';
+                            refresh();
+                            Actions.saveBindings().catch(console.error);
+                        };
+                        item.ondblclick = () => Actions.jumpToEditor(name);
+                        listEl.appendChild(item);
+                    });
+                    filterList(inputEl.value);
+                }
+            };
+
+            tagsEl.onclick = () => {
+                const isVisible = dropEl.classList.contains('show');
+                document.querySelectorAll('.wb-ms-dropdown.show').forEach((el) => el.classList.remove('show'));
+                if (!isVisible) {
+                    dropEl.classList.add('show');
+                    const isTouch = window.matchMedia('(pointer: coarse)').matches;
+                    if (!isTouch) inputEl.focus();
+                }
+            };
+
+            inputEl.oninput = (e) => filterList(e.target.value);
+
+            document.addEventListener('click', (e) => {
+                if (!dom.contains(e.target)) dropEl.classList.remove('show');
+            });
+
+            refresh();
+        };
 
         const primarySel = view.querySelector('#wb-bind-char-primary');
         const chatSel = view.querySelector('#wb-bind-chat');
-        const charSelectedWrap = view.querySelector('#wb-bind-char-selected');
-        const globalSelectedWrap = view.querySelector('#wb-bind-global-selected');
-        const charAddSelector = view.querySelector('#wb-bind-char-add-selector');
-        const globalAddSelector = view.querySelector('#wb-bind-global-add-selector');
-        const charAddSearch = view.querySelector('#wb-bind-char-add-search');
-        const globalAddSearch = view.querySelector('#wb-bind-global-add-search');
 
-        primarySel.innerHTML = this.buildSelectOptions(all, char.primary || '', true);
-        chatSel.innerHTML = this.buildSelectOptions(all, chat || '', true);
+        primarySel.innerHTML = createOpts(char.primary);
+        chatSel.innerHTML = createOpts(chat);
+
+        primarySel.onchange = () => Actions.saveBindings().catch(console.error);
+        chatSel.onchange = () => Actions.saveBindings().catch(console.error);
 
         primarySel.ondblclick = () => {
             if (primarySel.value) Actions.jumpToEditor(primarySel.value);
@@ -1476,111 +1305,11 @@ const UI = {
             if (chatSel.value) Actions.jumpToEditor(chatSel.value);
         };
 
-        let selectedCharAdditional = [...(char.additional || [])];
-        let selectedGlobal = [...(global || [])];
+        this.applyCustomDropdown('wb-bind-char-primary');
+        this.applyCustomDropdown('wb-bind-chat');
 
-        const rerender = () => {
-            this.renderBindingSelectedList(
-                charSelectedWrap,
-                selectedCharAdditional,
-                (name) => {
-                    selectedCharAdditional = selectedCharAdditional.filter((n) => n !== name);
-                    rerender();
-                },
-                (name) => Actions.jumpToEditor(name),
-            );
-
-            this.renderBindingSelectedList(
-                globalSelectedWrap,
-                selectedGlobal,
-                (name) => {
-                    selectedGlobal = selectedGlobal.filter((n) => n !== name);
-                    rerender();
-                },
-                (name) => Actions.jumpToEditor(name),
-            );
-
-            this.filterAddSelector(
-                charAddSelector,
-                all,
-                new Set(selectedCharAdditional),
-                charAddSearch.value || '',
-            );
-            this.filterAddSelector(
-                globalAddSelector,
-                all,
-                new Set(selectedGlobal),
-                globalAddSearch.value || '',
-            );
-        };
-
-        charAddSearch.oninput = () => {
-            this.filterAddSelector(charAddSelector, all, new Set(selectedCharAdditional), charAddSearch.value || '');
-        };
-        globalAddSearch.oninput = () => {
-            this.filterAddSelector(globalAddSelector, all, new Set(selectedGlobal), globalAddSearch.value || '');
-        };
-
-        charAddSelector.onchange = () => {
-            const v = charAddSelector.value;
-            if (!v) return;
-            if (!selectedCharAdditional.includes(v)) selectedCharAdditional.push(v);
-            charAddSelector.value = '';
-            rerender();
-        };
-
-        globalAddSelector.onchange = () => {
-            const v = globalAddSelector.value;
-            if (!v) return;
-            if (!selectedGlobal.includes(v)) selectedGlobal.push(v);
-            globalAddSelector.value = '';
-            rerender();
-        };
-
-        // 把当前选择写回 DOM，saveBindings 直接从 DOM 读
-        const syncSelectedToDom = () => {
-            charSelectedWrap.innerHTML = '';
-            selectedCharAdditional.forEach((n) => {
-                const el = document.createElement('div');
-                el.className = 'wb-bind-selected-item wb-hidden-sync';
-                el.dataset.val = n;
-                el.style.display = 'none';
-                charSelectedWrap.appendChild(el);
-            });
-
-            globalSelectedWrap.innerHTML = '';
-            selectedGlobal.forEach((n) => {
-                const el = document.createElement('div');
-                el.className = 'wb-bind-selected-item wb-hidden-sync';
-                el.dataset.val = n;
-                el.style.display = 'none';
-                globalSelectedWrap.appendChild(el);
-            });
-        };
-
-        const originalRenderBindingSelectedList = this.renderBindingSelectedList.bind(this);
-        this.renderBindingSelectedList = (container, names, onRemove, onJump) => {
-            originalRenderBindingSelectedList(container, names, onRemove, onJump);
-            if (container === charSelectedWrap || container === globalSelectedWrap) {
-                // 保证有可见项的同时，也有标准 class + data-val 节点给 saveBindings 读取
-                names.forEach((n) => {
-                    const exists = Array.from(container.querySelectorAll('.wb-bind-selected-item')).some((el) => el.dataset.val === n);
-                    if (!exists) {
-                        const h = document.createElement('div');
-                        h.className = 'wb-bind-selected-item';
-                        h.dataset.val = n;
-                        h.style.display = 'none';
-                        container.appendChild(h);
-                    }
-                });
-            }
-        };
-
-        rerender();
-        syncSelectedToDom();
-
-        // 恢复函数，避免影响其它地方
-        this.renderBindingSelectedList = originalRenderBindingSelectedList;
+        createMultiSelect('#wb-bind-char-list', char.additional, 'wb-bind-char-add');
+        createMultiSelect('#wb-bind-global-list', global, 'wb-bind-global');
     },
 
     renderManageView(filterText = '') {
@@ -1588,7 +1317,7 @@ const UI = {
         if (!container) return;
         container.innerHTML = '';
 
-        const term = safeText(filterText).toLowerCase();
+        const term = String(filterText || '').toLowerCase();
         const list = STATE.allBookNames.filter((n) => !term || n.toLowerCase().includes(term));
 
         list.forEach((name) => {
@@ -1631,11 +1360,117 @@ const UI = {
         });
     },
 
-    openStitchModal() {
-        if (!STATE.allBookNames.length) {
-            toastr.warning('没有可用世界书');
-            return;
+    applyCustomDropdown(selectId) {
+        const originalSelect = document.getElementById(selectId);
+        if (!originalSelect) return;
+
+        let trigger = document.getElementById(`wb-trigger-${selectId}`);
+        if (originalSelect.style.display !== 'none') {
+            originalSelect.style.display = 'none';
+            if (trigger) trigger.remove();
+
+            trigger = document.createElement('div');
+            trigger.id = `wb-trigger-${selectId}`;
+            trigger.className = 'wb-gr-trigger';
+            originalSelect.parentNode.insertBefore(trigger, originalSelect.nextSibling);
+
+            trigger.onclick = (e) => {
+                e.stopPropagation();
+                this.toggleCustomDropdown(selectId, trigger);
+            };
         }
+
+        const update = () => {
+            const selectedOpt = originalSelect.options[originalSelect.selectedIndex];
+            trigger.textContent = selectedOpt ? selectedOpt.text : '请选择...';
+        };
+
+        update();
+        originalSelect.addEventListener('change', update);
+    },
+
+    toggleCustomDropdown(selectId, triggerElem) {
+        const existing = document.getElementById('wb-active-dropdown');
+        if (existing) {
+            const isSame = existing.dataset.source === selectId;
+            existing.remove();
+            if (isSame) return;
+        }
+
+        const originalSelect = document.getElementById(selectId);
+        const dropdown = document.createElement('div');
+        dropdown.id = 'wb-active-dropdown';
+        dropdown.className = 'wb-gr-dropdown show';
+        dropdown.dataset.source = selectId;
+
+        const searchBox = document.createElement('div');
+        searchBox.className = 'wb-gr-search-box';
+
+        const searchInput = document.createElement('input');
+        searchInput.className = 'wb-gr-search-input';
+        searchInput.placeholder = '搜索选项...';
+        searchInput.onclick = (e) => e.stopPropagation();
+        searchBox.appendChild(searchInput);
+
+        const optionsContainer = document.createElement('div');
+        optionsContainer.className = 'wb-gr-options-container';
+
+        const createOption = (optNode) => {
+            const div = document.createElement('div');
+            div.className = 'wb-gr-option';
+            div.textContent = optNode.text;
+            if (optNode.selected) div.classList.add('selected');
+            div.onclick = (e) => {
+                e.stopPropagation();
+                originalSelect.value = optNode.value;
+                originalSelect.dispatchEvent(new Event('change'));
+                dropdown.remove();
+            };
+            optionsContainer.appendChild(div);
+        };
+
+        Array.from(originalSelect.children).forEach((child) => {
+            if (child.tagName === 'OPTGROUP') {
+                const label = document.createElement('div');
+                label.className = 'wb-gr-group-label';
+                label.textContent = child.label;
+                optionsContainer.appendChild(label);
+                Array.from(child.children).forEach(createOption);
+            } else if (child.tagName === 'OPTION') {
+                createOption(child);
+            }
+        });
+
+        if (originalSelect.options.length > 8) dropdown.appendChild(searchBox);
+        dropdown.appendChild(optionsContainer);
+        document.body.appendChild(dropdown);
+
+        const rect = triggerElem.getBoundingClientRect();
+        dropdown.style.top = `${rect.bottom + 5}px`;
+        dropdown.style.left = `${rect.left}px`;
+        dropdown.style.width = `${rect.width}px`;
+
+        const isTouch = window.matchMedia('(pointer: coarse)').matches;
+        if (!isTouch) searchInput.focus();
+
+        searchInput.oninput = (e) => {
+            const term = e.target.value.toLowerCase();
+            optionsContainer.querySelectorAll('.wb-gr-option').forEach((o) => {
+                o.classList.toggle('hidden', !o.textContent.toLowerCase().includes(term));
+            });
+        };
+
+        const closeHandler = (e) => {
+            if (!dropdown.contains(e.target) && e.target !== triggerElem) {
+                dropdown.remove();
+                document.removeEventListener('click', closeHandler);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeHandler), 0);
+    },
+
+    openStitchModal() {
+        if (!STATE.allBookNames.length) return toastr.warning('没有可用世界书');
 
         const sideState = {
             mode: 'copy',
@@ -1721,19 +1556,19 @@ const UI = {
                 <div class="wb-bind-title">${key === 'left' ? '左侧' : '右侧'}世界书</div>
                 <div style="display:flex;gap:8px;">
                     <select data-book="${key}" style="flex:1">${options}</select>
-                    <button class="wb-btn-rect" data-copy="${key}" style="padding:6px 10px;font-size:12px;">复制到${key === 'left' ? '右' : '左'}</button>
-                    <button class="wb-btn-rect" data-move="${key}" style="padding:6px 10px;font-size:12px;">移动到${key === 'left' ? '右' : '左'}</button>
+                    <button class="wb-btn-rect mini" data-copy="${key}">复制到${key === 'left' ? '右' : '左'}</button>
+                    <button class="wb-btn-rect mini" data-move="${key}">移动到${key === 'left' ? '右' : '左'}</button>
                 </div>
                 <div style="display:flex;gap:8px;margin-top:8px;">
                     <input class="wb-input-dark" data-search="${key}" placeholder="搜索条目..." value="${escapeHtml(side.keyword)}" style="flex:1">
-                    <button class="wb-btn-rect" data-all="${key}" style="padding:6px 10px;font-size:12px;">全选</button>
-                    <button class="wb-btn-rect" data-invert="${key}" style="padding:6px 10px;font-size:12px;">反选</button>
-                    <button class="wb-btn-rect" data-clear="${key}" style="padding:6px 10px;font-size:12px;">清空</button>
+                    <button class="wb-btn-rect mini" data-all="${key}">全选</button>
+                    <button class="wb-btn-rect mini" data-invert="${key}">反选</button>
+                    <button class="wb-btn-rect mini" data-clear="${key}">清空</button>
                 </div>
-                <div class="wb-scroll-list wb-stitch-list" data-drop="${key}" style="margin-top:8px;min-height:360px;">${htmlItems || '<div style="font-size:12px;color:#8ca0b9;padding:8px;text-align:center;">暂无条目</div>'}</div>
+                <div class="wb-scroll-list wb-stitch-list" data-drop="${key}" style="margin-top:8px;min-height:360px;">${htmlItems || '<div class="wb-ms-empty">暂无条目</div>'}</div>
                 <div style="display:flex;justify-content:center;gap:8px;margin-top:8px;">
-                    <button class="wb-btn-rect" data-edit="${key}" style="padding:6px 14px;font-size:12px;">编辑</button>
-                    <button class="wb-btn-rect" data-del="${key}" style="padding:6px 14px;font-size:12px;background:#d75252;">删除</button>
+                    <button class="wb-btn-rect mini" data-edit="${key}">编辑</button>
+                    <button class="wb-btn-rect mini danger" data-del="${key}">删除</button>
                 </div>
                 <div style="text-align:center;font-size:12px;color:#7188a3;margin-top:6px;">已选 ${side.selected.size}/${side.entries.length} · 拖拽到另一侧${sideState.mode === 'copy' ? '复制' : '移动'}</div>
             `;
@@ -1784,9 +1619,9 @@ const UI = {
                 const src = side.entries.find((e) => Number(e.uid) === Number(uidNum));
                 if (!src) return;
 
-                const clone = cloneData(src);
-                clone.uid = getNextUid(other.entries);
-                other.entries.push(clone);
+                const copy = cloneData(src);
+                copy.uid = getNextUid(other.entries);
+                other.entries.push(copy);
                 normalizeOrder(other.entries);
 
                 if (mode === 'move') {
@@ -1803,10 +1638,7 @@ const UI = {
 
             const transferSelected = async (mode) => {
                 const ids = [...side.selected];
-                if (!ids.length) {
-                    toastr.warning('请先选择条目');
-                    return;
-                }
+                if (!ids.length) return toastr.warning('请先选择条目');
 
                 for (const id of ids) {
                     // eslint-disable-next-line no-await-in-loop
@@ -1823,10 +1655,7 @@ const UI = {
             panel.querySelector(`[data-move="${key}"]`).onclick = () => transferSelected('move');
 
             panel.querySelector(`[data-edit="${key}"]`).onclick = async () => {
-                if (side.selected.size !== 1) {
-                    toastr.warning('编辑时请只选择一个条目');
-                    return;
-                }
+                if (side.selected.size !== 1) return toastr.warning('编辑时请只选择一个条目');
                 const id = [...side.selected][0];
                 const item = side.entries.find((e) => Number(e.uid) === Number(id));
                 if (!item) return;
@@ -1843,10 +1672,7 @@ const UI = {
             };
 
             panel.querySelector(`[data-del="${key}"]`).onclick = async () => {
-                if (!side.selected.size) {
-                    toastr.warning('请先选择条目');
-                    return;
-                }
+                if (!side.selected.size) return toastr.warning('请先选择条目');
                 if (!confirm(`删除 ${side.selected.size} 个条目？`)) return;
 
                 side.entries = side.entries.filter((e) => !side.selected.has(Number(e.uid)));
@@ -1909,7 +1735,7 @@ const UI = {
         };
 
         initLoad().catch((err) => {
-            pushDebug('加载缝合面板失败', err);
+            console.error(err);
             toastr.error('加载缝合面板失败');
         });
     },
@@ -1938,10 +1764,6 @@ jQuery(async () => {
     };
 
     injectButton();
-    try {
-        await Actions.init();
-        console.log('[Enhanced WB] loaded');
-    } catch (e) {
-        pushDebug('初始化失败', e);
-    }
+    await Actions.init();
+    console.log('[Enhanced WB] loaded');
 });
