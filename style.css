@@ -175,7 +175,11 @@
     background: rgba(255, 255, 255, 0.88);
 }
 
+/* 顶部固定批量栏 */
 .wb-batch-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 12;
     display: flex;
     align-items: center;
     gap: 6px;
@@ -183,7 +187,8 @@
     border: 1px solid var(--wb-border);
     border-radius: 12px;
     padding: 8px;
-    background: rgba(255, 255, 255, 0.88);
+    background: rgba(255, 255, 255, 0.94);
+    backdrop-filter: blur(3px);
 }
 
 #wb-selection-info {
@@ -246,6 +251,11 @@
     background: var(--wb-accent-hover);
 }
 
+.wb-btn-circle.active {
+    background: #4ec2fb;
+    box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.22);
+}
+
 .wb-btn-rect {
     border: 1px solid var(--wb-accent-border);
     background: var(--wb-accent);
@@ -291,6 +301,8 @@
 }
 
 .wb-card {
+    position: relative;
+    overflow: hidden;
     border-radius: 12px;
     border: 1px solid var(--wb-border);
     background: var(--wb-bg-card);
@@ -298,7 +310,22 @@
 }
 
 .wb-card.selected {
+    border-color: #67cfff;
     box-shadow: 0 0 0 2px rgba(102, 204, 255, 0.35), 0 2px 8px rgba(62, 108, 140, 0.12);
+}
+
+.wb-card.selected::before {
+    content: "已选";
+    position: absolute;
+    top: 0;
+    left: 0;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 800;
+    color: #fff;
+    background: linear-gradient(135deg, #66ccff, #45bbfb);
+    border-bottom-right-radius: 8px;
+    z-index: 2;
 }
 
 .wb-card.type-blue {
@@ -328,6 +355,15 @@
     align-items: center;
     gap: 8px;
     width: 100%;
+}
+
+/* 默认隐藏点选，仅批量编辑模式显示 */
+#enhanced-wb-panel-v6 .wb-select-dot {
+    display: none;
+}
+
+#enhanced-wb-panel-v6.wb-batch-editing .wb-select-dot {
+    display: inline-block;
 }
 
 .wb-select-dot {

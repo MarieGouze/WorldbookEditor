@@ -18,13 +18,13 @@ const STATE = {
     currentView: 'editor',
     currentBookName: null,
     isInitialized: false,
-    isManageDirty: true,
     entries: [],
     allBookNames: [],
     metadata: {},
     boundBooksSet: {},
     editorSearch: '',
     selectedUids: new Set(),
+    batchEditMode: false,
     bindings: {
         char: { primary: null, additional: [] },
         global: [],
@@ -334,10 +334,8 @@ const API = {
 const Actions = {
     async flushPendingSave() {
         if (!STATE.debouncer) return;
-
         clearTimeout(STATE.debouncer);
         STATE.debouncer = null;
-
         if (STATE.currentBookName && Array.isArray(STATE.entries)) {
             await API.saveBookEntries(STATE.currentBookName, STATE.entries);
         }
@@ -345,7 +343,6 @@ const Actions = {
 
     queueSave() {
         if (STATE.debouncer) clearTimeout(STATE.debouncer);
-
         const targetBookName = STATE.currentBookName;
         const targetEntries = STATE.entries;
 
@@ -369,7 +366,6 @@ const Actions = {
         if (pos === 1) return 90000;
         if (pos === 5) return 80000;
         if (pos === 6) return 70000;
-
         if (pos === 4) return entry.depth ?? 4;
         if (pos === 2) return anDepth + 0.6;
         if (pos === 3) return anDepth + 0.4;
@@ -379,10 +375,8 @@ const Actions = {
 
     async init() {
         if (STATE.isInitialized) return;
-
         UI.initTooltips();
         this.registerEvents();
-
         await this.refreshAllContext();
         STATE.isInitialized = true;
     },
@@ -432,6 +426,7 @@ const Actions = {
             UI.renderBookSelector();
             UI.renderBindingView();
             UI.renderPresetBar();
+
             if (STATE.currentView === 'manage') UI.renderManageView();
             if (STATE.currentView === 'stitch') UI.renderStitchView();
         } catch (e) {
@@ -456,7 +451,6 @@ const Actions = {
             if (STATE.currentBookName !== name) return;
 
             STATE.entries = loadedEntries;
-
             STATE.entries.sort((a, b) => {
                 const scoreA = this.getEntrySortScore(a);
                 const scoreB = this.getEntrySortScore(b);
@@ -480,7 +474,6 @@ const Actions = {
     updateEntry(uid, updater) {
         const entry = STATE.entries.find((e) => e.uid === uid);
         if (!entry) return;
-
         updater(entry);
         UI.updateCardStatus(uid);
         UI.renderGlobalStats();
@@ -536,7 +529,6 @@ const Actions = {
         toastr.success('已按优先级重排');
     },
 
-    // ---------- 多选批量 ----------
     getVisibleEntries() {
         const term = String(STATE.editorSearch || '').toLowerCase().trim();
         return STATE.entries.filter((e) => {
@@ -654,7 +646,6 @@ const Actions = {
         this.queueSave();
     },
 
-    // ---------- 单书状态预设 ----------
     getPresetStore() {
         if (!STATE.metadata[CONFIG.presetStoreKey]) {
             STATE.metadata[CONFIG.presetStoreKey] = {};
@@ -727,6 +718,7 @@ const Actions = {
         STATE.entries.forEach((entry) => {
             const snap = snapshot[entry.uid];
             if (!snap) return;
+
             entry.disable = !!snap.disable;
             entry.constant = !!snap.constant;
             entry.selective = !entry.constant;
@@ -936,7 +928,6 @@ const Actions = {
         }
     },
 
-    // -------- Stitch --------
     stitchSide(side) {
         return side === 'left' ? STATE.stitch.left : STATE.stitch.right;
     },
@@ -1093,10 +1084,11 @@ const UI = {
                     <div class="wb-tool-bar">
                         <input class="wb-input-dark" id="wb-search-entry" placeholder="搜索条目...">
                         <button class="wb-btn-circle" id="btn-sort-priority" title="按优先级重排"><i class="fa-solid fa-filter"></i></button>
+                        <button class="wb-btn-circle" id="btn-toggle-batch-edit" title="批量编辑"><i class="fa-solid fa-pen-to-square"></i></button>
                         <button class="wb-btn-circle" id="btn-add-entry" title="新建条目"><i class="fa-solid fa-plus"></i></button>
                     </div>
 
-                    <div class="wb-batch-toolbar">
+                    <div class="wb-batch-toolbar wb-hidden" id="wb-batch-toolbar">
                         <span id="wb-selection-info">已选 0/0</span>
                         <button class="wb-btn-rect mini" id="wb-select-all">全选(可见)</button>
                         <button class="wb-btn-rect mini" id="wb-select-invert">反选(可见)</button>
@@ -1107,7 +1099,6 @@ const UI = {
                         <button class="wb-btn-rect mini" id="wb-batch-constant-off">设非常驻</button>
 
                         <select id="wb-batch-position" class="wb-batch-select">
-                            <option value="">批量位置...</option>
                             <option value="before_character_definition">角色定义之前</option>
                             <option value="after_character_definition">角色定义之后</option>
                             <option value="before_author_note">作者注释之前</option>
@@ -1223,8 +1214,9 @@ const UI = {
 
         $('#wb-book-selector').addEventListener('change', (e) => Actions.loadBook(e.target.value));
         $('#wb-search-entry').oninput = (e) => UI.renderList(e.target.value);
-        $('#btn-add-entry').onclick = () => Actions.addNewEntry();
         $('#btn-sort-priority').onclick = () => Actions.sortByPriority();
+        $('#btn-add-entry').onclick = () => Actions.addNewEntry();
+        $('#btn-toggle-batch-edit').onclick = () => UI.toggleBatchEditMode();
 
         $('#wb-btn-import').onclick = () => Actions.actionImport();
         $('#wb-btn-export').onclick = () => Actions.actionExport();
@@ -1245,15 +1237,9 @@ const UI = {
         $('#wb-batch-constant-on').onclick = () => Actions.batchConstant(true);
         $('#wb-batch-constant-off').onclick = () => Actions.batchConstant(false);
 
-        $('#wb-batch-position-apply').onclick = () => {
-            Actions.batchSetPosition($('#wb-batch-position').value);
-        };
-        $('#wb-batch-order-apply').onclick = () => {
-            Actions.batchSetOrder($('#wb-batch-order').value);
-        };
-        $('#wb-batch-depth-apply').onclick = () => {
-            Actions.batchSetDepth($('#wb-batch-depth').value);
-        };
+        $('#wb-batch-position-apply').onclick = () => Actions.batchSetPosition($('#wb-batch-position').value);
+        $('#wb-batch-order-apply').onclick = () => Actions.batchSetOrder($('#wb-batch-order').value);
+        $('#wb-batch-depth-apply').onclick = () => Actions.batchSetDepth($('#wb-batch-depth').value);
 
         const fileInput = $('#wb-import-file');
         fileInput.onchange = (e) => {
@@ -1280,9 +1266,14 @@ const UI = {
         }
 
         UI.switchView('editor');
+        UI.applyBatchEditState();
     },
 
     switchView(viewName) {
+        if (viewName !== 'editor' && STATE.batchEditMode) {
+            this.toggleBatchEditMode(false);
+        }
+
         document.querySelectorAll('.wb-tab').forEach((el) => {
             el.classList.toggle('active', el.dataset.tab === viewName);
         });
@@ -1303,7 +1294,30 @@ const UI = {
             this.renderGlobalStats();
             this.renderList(STATE.editorSearch || '');
             this.updateSelectionInfo();
+            this.applyBatchEditState();
         }
+    },
+
+    toggleBatchEditMode(forceVal = null) {
+        const next = typeof forceVal === 'boolean' ? forceVal : !STATE.batchEditMode;
+        STATE.batchEditMode = next;
+        this.applyBatchEditState();
+
+        if (!next) {
+            Actions.clearSelection();
+        } else {
+            this.updateSelectionInfo();
+        }
+    },
+
+    applyBatchEditState() {
+        const panel = document.getElementById(CONFIG.id);
+        const bar = document.getElementById('wb-batch-toolbar');
+        const btn = document.getElementById('btn-toggle-batch-edit');
+
+        if (bar) bar.classList.toggle('wb-hidden', !STATE.batchEditMode);
+        if (btn) btn.classList.toggle('active', STATE.batchEditMode);
+        if (panel) panel.classList.toggle('wb-batch-editing', STATE.batchEditMode);
     },
 
     renderBookSelector() {
@@ -1406,8 +1420,7 @@ const UI = {
             const filterList = (term) => {
                 const lower = term.toLowerCase();
                 listEl.querySelectorAll('.wb-ms-item').forEach((item) => {
-                    if (item.textContent.toLowerCase().includes(lower)) item.classList.remove('hidden');
-                    else item.classList.add('hidden');
+                    item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(lower));
                 });
             };
 
@@ -1428,7 +1441,6 @@ const UI = {
                             refresh();
                             Actions.saveBindings();
                         };
-                        tag.ondblclick = () => Actions.loadBook(name).then(() => Actions.switchView('editor'));
                         tagsEl.appendChild(tag);
                     });
                 }
@@ -1448,7 +1460,6 @@ const UI = {
                             refresh();
                             Actions.saveBindings();
                         };
-                        item.ondblclick = () => Actions.loadBook(name).then(() => Actions.switchView('editor'));
                         listEl.appendChild(item);
                     });
                     filterList(inputEl.value);
@@ -1458,11 +1469,7 @@ const UI = {
             tagsEl.onclick = () => {
                 const isVisible = dropEl.classList.contains('show');
                 document.querySelectorAll('.wb-ms-dropdown.show').forEach((el) => el.classList.remove('show'));
-                if (!isVisible) {
-                    dropEl.classList.add('show');
-                    const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
-                    if (!isTouchDevice) inputEl.focus();
-                }
+                if (!isVisible) dropEl.classList.add('show');
             };
 
             inputEl.oninput = (e) => filterList(e.target.value);
@@ -1480,9 +1487,6 @@ const UI = {
             const el = document.getElementById(id);
             if (el) {
                 el.onchange = () => Actions.saveBindings();
-                el.ondblclick = () => {
-                    if (el.value) Actions.loadBook(el.value).then(() => Actions.switchView('editor'));
-                };
                 this.applyCustomDropdown(id);
             }
         });
@@ -1534,18 +1538,18 @@ const UI = {
         });
 
         this.updateSelectionInfo();
+        this.applyBatchEditState();
     },
 
     createCard(entry, index) {
         const isEnabled = !entry.disable;
         const isConstant = !!entry.constant;
-        const keys = entry.key || [];
         const selected = STATE.selectedUids.has(Number(entry.uid));
+        const keys = entry.key || [];
 
         const card = document.createElement('div');
         let typeClass = '';
         if (isEnabled) typeClass = isConstant ? 'type-blue' : 'type-green';
-
         card.className = `wb-card ${isEnabled ? '' : 'disabled'} ${typeClass} ${selected ? 'selected' : ''}`;
         card.dataset.uid = entry.uid;
         card.dataset.index = index;
@@ -1649,10 +1653,10 @@ const UI = {
         else if (entry.constant) card.classList.add('type-blue');
         else card.classList.add('type-green');
 
+        card.classList.toggle('selected', STATE.selectedUids.has(Number(uid)));
+
         const tokenEl = card.querySelector('.wb-token-display');
         if (tokenEl) tokenEl.textContent = Actions.getTokenCount(entry.content);
-
-        card.classList.toggle('selected', STATE.selectedUids.has(Number(uid)));
     },
 
     openContentPopup(entry) {
@@ -1775,7 +1779,6 @@ const UI = {
         });
     },
 
-    // -------- Stitch UI --------
     renderStitchView() {
         const modeEl = document.getElementById('wb-stitch-mode');
         if (modeEl) {
@@ -1858,13 +1861,8 @@ const UI = {
             };
         }
 
-        if (btnCopy) {
-            btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
-        }
-
-        if (btnMove) {
-            btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
-        }
+        if (btnCopy) btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
+        if (btnMove) btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
 
         const term = side.search.toLowerCase();
         const filteredEntries = side.entries.filter((entry) => !term || String(entry.comment || '').toLowerCase().includes(term));
@@ -1909,17 +1907,6 @@ const UI = {
                 e.dataTransfer.setData('text/uid', item.dataset.uid);
                 e.dataTransfer.setData('text/from-side', sideKey);
             });
-
-            item.ondblclick = () => {
-                const uid = Number(item.dataset.uid);
-                Actions.loadBook(side.book).then(() => {
-                    Actions.switchView('editor');
-                    setTimeout(() => {
-                        const btn = document.querySelector(`.wb-card[data-uid="${uid}"] .btn-preview`);
-                        if (btn) btn.click();
-                    }, 80);
-                });
-            };
         });
 
         listEl.ondragover = (e) => {
@@ -1962,7 +1949,6 @@ const UI = {
             trigger = document.createElement('div');
             trigger.id = `wb-trigger-${selectId}`;
             trigger.className = 'wb-gr-trigger';
-
             originalSelect.parentNode.insertBefore(trigger, originalSelect.nextSibling);
             trigger.onclick = (e) => { e.stopPropagation(); this.toggleCustomDropdown(selectId, trigger); };
         }
