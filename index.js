@@ -592,21 +592,45 @@ const UI = {
     },
 };
 
-// --- Entry Point ---
+// --- Entry Point (Corrected) ---
 jQuery(async () => {
-    // Create and inject the button into the UI
-    const optionsMenu = $('#options-menu');
-    if (optionsMenu.length > 0) {
-        const buttonHtml = `
-            <div id="worldbook-suite-button" class="option_item">
-                <i class="fa-solid fa-book-atlas"></i>
-                <span>世界书套件</span>
-            </div>
-        `;
-        optionsMenu.append(buttonHtml);
-        $('#worldbook-suite-button').on('click', () => {
-            $('#options').hide();
-            UI.open();
-        });
-    }
+    // This function handles injecting the button into the SillyTavern UI.
+    // It is based on the robust logic from your original script.
+    const injectButton = () => {
+        const buttonId = 'worldbook-suite-button';
+        if (document.getElementById(buttonId)) return;
+
+        // Using the correct, more reliable selector from the original script.
+        const container = document.querySelector('#options .options-content');
+
+        if (container) {
+            // Using an 'a' tag for better compatibility with SillyTavern's menu style.
+            const buttonHtml = `
+                <a id="${buttonId}" class="interactable" title="世界书套件" tabindex="0">
+                    <i class="fa-lg fa-solid fa-book-atlas"></i>
+                    <span>世界书套件</span>
+                </a>
+            `;
+            
+            // Append the button using jQuery.
+            $(container).append(buttonHtml);
+
+            // Bind the click event to open our new panel.
+            $(`#${buttonId}`).于('click', (e) => {
+                e.preventDefault();
+                // Explicitly hide the main options panel to prevent overlap.
+                $('#options').hide();
+                // Call the open function from our UI object.
+                UI.open();
+            });
+
+            console.log('[Worldbook Suite] Button injected successfully.');
+
+        } else {
+            console.warn('[Worldbook Suite] Target container #options .options-content not found. Button injection skipped.');
+        }
+    };
+
+    // Run the injection function immediately on script load.
+    injectButton();
 });
