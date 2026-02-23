@@ -8,7 +8,7 @@ import {
 } from '../../../world-info.js';
 
 const CONFIG = {
-    id: 'enhanced-wb-panel-v3',
+    id: 'enhanced-wb-panel-v3', // 保持 v3 ID 以匹配你的 CSS
     btnId: 'wb-menu-btn-v3',
     settingsKey: 'WorldbookEditor_Metadata',
     colors: { accent: '#7c5cbd' }
@@ -467,9 +467,7 @@ const UI = {
         bulkBar.querySelector('#btn-sel-all').onclick = () => Actions.batchSelectAll();
 
         // Init
-        Actions.init().then(() => {
-            if (STATE.allBookNames.length > 0) Actions.loadBook(STATE.allBookNames[0]);
-        });
+        // Actions.init() will be called by performInit at the end
     },
 
     renderBookSelector() {
@@ -635,7 +633,7 @@ const UI = {
                 };
                 
                 // Remove
-                item.querySelector('.remove-bind').onclick = () => API.setBindings('global', name, false).键，然后(操作。refreshContext).键，然后(UI.renderBindingView);
+                item.querySelector('.remove-bind').onclick = () => API.setBindings('global', name, false).then(Actions.refreshContext).then(UI.renderBindingView);
                 
                 container.appendChild(item);
             });
@@ -645,14 +643,73 @@ const UI = {
         const addDiv = document.createElement('div');
         addDiv.innerHTML = `<select style="margin-top:10px;width:100%"><option>+ 添加全局世界书...</option>${STATE.allBookNames.map(n=>`<option value="${n}">${n}</option>`).join('')}</select>`;
         addDiv.querySelector('select').onchange = (e) => {
-             if (e.target.value) API.setBindings('global', e.target.value, true).键，然后(操作.refreshContext).键，然后(UI.renderBindingView);
+             if (e.target.value) API.setBindings('global', e.target.value, true).then(Actions.refreshContext).then(UI.renderBindingView);
         };
         container.appendChild(addDiv);
     }
 };
 
+// [修复] 移植了 V6 版本稳健的按钮注入和初始化逻辑
 jQuery(async () => {
-    const btn = document.createElement('div'); // Simplified injection
-    $('#options .options-content').append(`<a id="${CONFIG.btnId}" class="interactable" title="世界书 Pro"><i class="fa-solid fa-book-atlas"></i> 世界书 Pro</a>`);
-    $(`#${CONFIG.btnId}`).click(() => UI.open());
+
+    const injectButton = () => {
+        // 防止重复添加
+        if (document.getElementById(CONFIG.btnId)) return;
+
+        // 修改定位目标：直接定位到菜单容器
+        const container = document.querySelector('#options .options-content');
+
+        if (container) {
+            // 使用 ST 标准类名，确保样式一致
+            const targetClasses = 'interactable';
+
+            // 保持 V6 的图标风格，但使用 V3 的逻辑入口
+            const html = `
+                <a id="${CONFIG.btnId}" class="${targetClasses}" title="世界书 Pro" tabindex="0">
+                    <i class="fa-lg fa-solid fa-book-journal-whills"></i>
+                    <span>世界书 Pro</span>
+                </a>
+            `;
+
+            // 插入到容器末尾
+            $(container).append(html);
+
+            // 绑定点击事件：点击后隐藏选项面板，提升体验
+            $(`#${CONFIG.btnId}`).于('click'， (e) => {
+                e.preventDefault();
+                $('#options').hide(); // 显式关闭 #options 面板
+                UI.open();
+            });
+
+            console.log("[Worldbook Pro] Button injected successfully.");
+        } else {
+            console.warn("[Worldbook Pro] #options .options-content not found. Retrying later...");
+        }
+    };
+
+    // 立即尝试注入
+    injectButton();
+
+    // 安全初始化逻辑：确保在核心数据就绪后再执行预加载
+    const performInit = async () => {
+        try {
+            await Actions.init();
+            // 如果第一次注入失败，初始化时再试一次
+            injectButton();
+            console.log("[Worldbook Pro] Initialization complete.");
+        } catch (e) {
+            console.error("[Worldbook Pro] Initialization failed:", e);
+        }
+    };
+
+    // 检查 ST 核心是否已完成初始化
+    // 只要 world_names 是数组（哪怕是空的），说明 getSettings 已执行
+    if (typeof world_names === 'undefined') {
+        console.log("[Worldbook Pro] Waiting for APP_READY...");
+        eventSource.于(event_types.APP_READY, performInit);
+    } else {
+        performInit();
+    }
+
+    console.log("Worldbook Pro Script Loaded");
 });
