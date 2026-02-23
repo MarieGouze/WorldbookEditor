@@ -29,6 +29,7 @@ const STATE = {
         global: [],
         chat: null,
     },
+    debugMessages: [],
 };
 
 const WI_POSITION_MAP = {
@@ -40,12 +41,26 @@ const WI_POSITION_MAP = {
     5: 'before_example_messages',
     6: 'after_example_messages',
 };
+
 const WI_POSITION_MAP_REV = Object.fromEntries(
     Object.entries(WI_POSITION_MAP).map(([k, v]) => [v, Number(k)]),
 );
 
+function cloneData(data) {
+    try {
+        return structuredClone(data);
+    } catch (_e) {
+        return JSON.parse(JSON.stringify(data));
+    }
+}
+
+function safeText(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+}
+
 function escapeHtml(str) {
-    return String(str || '').replace(/[&<>"']/g, (m) => ({
+    return safeText(str).replace(/[&<>"']/g, (m) => ({
         '&': '&amp;',
         '<': '&lt;',
         '>': '&gt;',
@@ -54,15 +69,102 @@ function escapeHtml(str) {
     }[m]));
 }
 
-function tokenCount(text) {
-    if (!text) return 0;
-    try {
-        const c = getContext();
-        if (c?.getTokenCount) return c.getTokenCount(text);
-    } catch (e) {
-        // noop
+function toNum(v, fallback = 0) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+}
+
+function toBool(v, fallback = false) {
+    if (typeof v === 'boolean') return v;
+    if (v === 1 || v === '1' || v === 'true') return true;
+    if (v === 0 || v === '0' || v === 'false') return false;
+    return fallback;
+}
+
+function ensureArray(v) {
+    if (Array.isArray(v)) return v;
+    if (typeof v === 'string') {
+        return v
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
     }
-    return Math.ceil(String(text).length / 3);
+    return [];
+}
+
+function pushDebug(message, errorObj = null) {
+    const line = `[${new Date().toLocaleTimeString()}] ${message}${errorObj ? ` | ${errorObj.message || String(errorObj)}` : ''}`;
+    STATE.debugMessages.push(line);
+    if (STATE.debugMessages.length > 200) {
+        STATE.debugMessages = STATE.debugMessages.slice(-120);
+    }
+    console.warn('[Enhanced WB]', line, errorObj || '');
+    UI.renderDebug();
+}
+
+function normalizePosition(rawPos) {
+    if (typeof rawPos === 'string') {
+        if (WI_POSITION_MAP_REV[rawPos] !== undefined) return WI_POSITION_MAP_REV[rawPos];
+        if (/^\d+$/.test(rawPos)) return toNum(rawPos, 1);
+        return 1;
+    }
+    const p = toNum(rawPos, 1);
+    return p >= 0 && p <= 6 ? p : 1;
+}
+
+function normalizeEntry(rawEntry, uidFallback, idx) {
+    const src = cloneData(rawEntry || {});
+    const out = { ...src };
+
+    out.uid = toNum(out.uid, toNum(uidFallback, idx));
+
+    out.comment = safeText(
+        out.comment
+        ?? out.title
+        ?? out.name
+        ?? out.keyString
+        ?? `条目 ${out.uid}`,
+    );
+
+    out.content = safeText(
+        out.content
+        ?? out.text
+        ?? out.value
+        ?? '',
+    );
+
+    const keyList = ensureArray(out.key ?? out.keys ?? out.keyword ?? out.keywords);
+    out.key = keyList.map((k) => safeText(k)).filter(Boolean);
+
+    out.position = normalizePosition(out.position);
+    out.depth = Math.max(0, toNum(out.depth, 4));
+    out.order = toNum(out.order, idx);
+    out.probability = toNum(out.probability, 100);
+
+    if (typeof out.disable === 'boolean') {
+        out.disable = out.disable;
+    } else if (out.enabled !== undefined) {
+        out.disable = !toBool(out.enabled, true);
+    } else {
+        out.disable = false;
+    }
+
+    out.constant = toBool(out.constant, false);
+
+    if (typeof out.selective !== 'boolean') {
+        out.selective = !out.constant;
+    }
+
+    return out;
+}
+
+function sortEntriesInPlace(entries) {
+    entries.sort((a, b) => {
+        const oa = toNum(a.order, 0);
+        const ob = toNum(b.order, 0);
+        if (oa !== ob) return oa - ob;
+        return toNum(a.uid, 0) - toNum(b.uid, 0);
+    });
 }
 
 function normalizeOrder(entries) {
@@ -71,13 +173,15 @@ function normalizeOrder(entries) {
     });
 }
 
-function sortEntriesInPlace(entries) {
-    entries.sort((a, b) => {
-        const oa = Number(a.order ?? 0);
-        const ob = Number(b.order ?? 0);
-        if (oa !== ob) return oa - ob;
-        return Number(a.uid) - Number(b.uid);
-    });
+function tokenCount(text) {
+    if (!text) return 0;
+    try {
+        const c = getContext();
+        if (typeof c?.getTokenCount === 'function') return c.getTokenCount(text);
+    } catch (_e) {
+        // noop
+    }
+    return Math.ceil(String(text).length / 3);
 }
 
 function getPosLabel(entry) {
@@ -163,8 +267,11 @@ async function setBinding(type, worldName, enabled) {
     }
 
     if (type === 'chat') {
-        if (enabled) context.chatMetadata.world_info = worldName;
-        else if (context.chatMetadata.world_info === worldName) delete context.chatMetadata.world_info;
+        if (enabled && worldName) {
+            context.chatMetadata.world_info = worldName;
+        } else {
+            delete context.chatMetadata.world_info;
+        }
         context.saveMetadataDebounced?.();
         return;
     }
@@ -207,10 +314,34 @@ const API = {
     async loadBook(name) {
         const data = await getContext().loadWorldInfo(name);
         if (!data) throw new Error(`世界书不存在: ${name}`);
-        const obj = structuredClone(data.entries || {});
-        const arr = Object.values(obj);
+
+        const rawEntries = data.entries || {};
+        const arr = [];
+
+        Object.entries(rawEntries).forEach(([uidKey, rawEntry], idx) => {
+            try {
+                arr.push(normalizeEntry(rawEntry, uidKey, idx));
+            } catch (e) {
+                pushDebug(`条目解析失败 book=${name} uid=${uidKey}`, e);
+            }
+        });
+
+        // UID 去重，避免重复 UID 导致操作错乱
+        const used = new Set();
+        arr.forEach((e, i) => {
+            let uid = toNum(e.uid, i);
+            while (used.has(uid)) uid += 1;
+            e.uid = uid;
+            used.add(uid);
+        });
+
         sortEntriesInPlace(arr);
         normalizeOrder(arr);
+
+        if (Object.keys(rawEntries).length && arr.length === 0) {
+            pushDebug(`世界书 ${name} 有条目，但解析结果为空（可能字段格式异常）`);
+        }
+
         return arr;
     },
 
@@ -218,13 +349,14 @@ const API = {
         if (!name || !Array.isArray(entriesArray)) return;
 
         const oldData = (await getContext().loadWorldInfo(name)) || { entries: {} };
+        const oldEntries = oldData.entries || {};
         const nextObj = {};
 
         entriesArray.forEach((entry) => {
-            const uid = entry.uid;
-            if (uid === undefined || uid === null) return;
-            const oldEntry = oldData.entries?.[uid] || {};
-            nextObj[uid] = { ...oldEntry, ...structuredClone(entry) };
+            const uid = toNum(entry.uid, null);
+            if (uid === null || uid === undefined) return;
+            const oldEntry = oldEntries[uid] || {};
+            nextObj[uid] = { ...oldEntry, ...cloneData(entry) };
         });
 
         await getContext().saveWorldInfo(name, { ...oldData, entries: nextObj }, false);
@@ -275,20 +407,26 @@ const Actions = {
         const et = event_types;
 
         es.on(et.SETTINGS_UPDATED, () => {
-            this.refreshContext().catch(console.error);
+            this.refreshContext().catch((e) => pushDebug('SETTINGS_UPDATED 刷新失败', e));
         });
 
         es.on(et.CHARACTER_SELECTED, () => {
-            setTimeout(() => this.refreshContext().catch(console.error), 100);
+            setTimeout(() => {
+                this.refreshContext().catch((e) => pushDebug('CHARACTER_SELECTED 刷新失败', e));
+            }, 100);
         });
 
         es.on(et.CHAT_CHANGED, () => {
-            this.refreshContext().catch(console.error);
+            this.refreshContext().catch((e) => pushDebug('CHAT_CHANGED 刷新失败', e));
         });
 
         es.on(et.WORLDINFO_UPDATED, async (name) => {
             if (name && name === STATE.currentBookName) {
-                await this.loadBook(name);
+                try {
+                    await this.loadBook(name);
+                } catch (e) {
+                    pushDebug(`WORLDINFO_UPDATED 加载失败: ${name}`, e);
+                }
             }
         });
     },
@@ -312,6 +450,7 @@ const Actions = {
             UI.renderBindingView();
             UI.renderManageView(document.getElementById('wb-manage-search')?.value || '');
             UI.renderPresetBar();
+            UI.renderDebug();
         }
     },
 
@@ -326,13 +465,17 @@ const Actions = {
 
     queueSave() {
         if (STATE.debouncer) clearTimeout(STATE.debouncer);
+
         const targetName = STATE.currentBookName;
         const targetEntries = STATE.entries;
 
         STATE.debouncer = setTimeout(() => {
             STATE.debouncer = null;
             if (targetName && Array.isArray(targetEntries)) {
-                API.saveBookEntries(targetName, targetEntries).catch(console.error);
+                API.saveBookEntries(targetName, targetEntries).catch((e) => {
+                    pushDebug(`保存失败: ${targetName}`, e);
+                    toastr.error(`保存失败: ${targetName}`);
+                });
             }
         }, 260);
     },
@@ -345,13 +488,19 @@ const Actions = {
         STATE.selectedUids.clear();
         STATE.searchText = '';
 
-        const entries = await API.loadBook(name);
-        STATE.entries = entries;
+        try {
+            STATE.entries = await API.loadBook(name);
+        } catch (e) {
+            pushDebug(`加载世界书失败: ${name}`, e);
+            STATE.entries = [];
+            toastr.error(`加载失败: ${name}`);
+        }
 
         UI.renderBookSelector();
         UI.renderPresetBar();
         UI.renderEntryList('');
         UI.renderStats();
+        UI.renderDebug();
     },
 
     getEntry(uidVal) {
@@ -368,9 +517,12 @@ const Actions = {
     },
 
     async addEntry() {
-        if (!STATE.currentBookName) return toastr.warning('请先选择一本世界书');
+        if (!STATE.currentBookName) {
+            toastr.warning('请先选择一本世界书');
+            return;
+        }
         const maxUid = STATE.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1);
-        const item = {
+        const item = normalizeEntry({
             uid: maxUid + 1,
             comment: '新建条目',
             disable: false,
@@ -382,7 +534,8 @@ const Actions = {
             depth: 4,
             probability: 100,
             selective: true,
-        };
+        }, maxUid + 1, STATE.entries.length);
+
         STATE.entries.unshift(item);
         normalizeOrder(STATE.entries);
         UI.renderEntryList(STATE.searchText);
@@ -430,7 +583,10 @@ const Actions = {
     },
 
     batchUpdate(fn) {
-        if (!STATE.selectedUids.size) return toastr.warning('请先勾选条目');
+        if (!STATE.selectedUids.size) {
+            toastr.warning('请先勾选条目');
+            return;
+        }
         STATE.entries.forEach((e) => {
             if (STATE.selectedUids.has(Number(e.uid))) fn(e);
         });
@@ -453,7 +609,7 @@ const Actions = {
     batchOrder(delta) {
         const d = Number(delta);
         if (!d) return;
-        this.batchUpdate((e) => { e.order = Number(e.order ?? 0) + d; });
+        this.batchUpdate((e) => { e.order = toNum(e.order, 0) + d; });
         sortEntriesInPlace(STATE.entries);
         normalizeOrder(STATE.entries);
         UI.renderEntryList(STATE.searchText);
@@ -463,7 +619,7 @@ const Actions = {
         const d = Number(delta);
         if (!d) return;
         this.batchUpdate((e) => {
-            e.depth = Math.max(0, Number(e.depth ?? 4) + d);
+            e.depth = Math.max(0, toNum(e.depth, 4) + d);
         });
     },
 
@@ -478,7 +634,11 @@ const Actions = {
     },
 
     async saveCurrentPreset() {
-        if (!STATE.currentBookName) return toastr.warning('请先选择世界书');
+        if (!STATE.currentBookName) {
+            toastr.warning('请先选择世界书');
+            return;
+        }
+
         const defaultName = `预设_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
         const name = prompt('输入预设名称：', defaultName);
         if (!name) return;
@@ -491,9 +651,9 @@ const Actions = {
             snap[e.uid] = {
                 disable: !!e.disable,
                 constant: !!e.constant,
-                order: Number(e.order ?? 0),
-                depth: Number(e.depth ?? 4),
-                position: Number(e.position ?? 1),
+                order: toNum(e.order, 0),
+                depth: toNum(e.depth, 4),
+                position: toNum(e.position, 1),
             };
         });
 
@@ -528,9 +688,9 @@ const Actions = {
             if (!s) return;
             e.disable = !!s.disable;
             e.constant = !!s.constant;
-            e.order = Number(s.order ?? 0);
-            e.depth = Number(s.depth ?? 4);
-            e.position = Number(s.position ?? 1);
+            e.order = toNum(s.order, 0);
+            e.depth = toNum(s.depth, 4);
+            e.position = toNum(s.position, 1);
         });
 
         sortEntriesInPlace(STATE.entries);
@@ -567,11 +727,11 @@ const Actions = {
 
         const additional = Array.from(
             view.querySelectorAll('#wb-bind-char-selected .wb-bind-selected-item'),
-        ).map((el) => el.dataset.val);
+        ).map((el) => el.dataset.val).filter(Boolean);
 
         const globalBooks = Array.from(
             view.querySelectorAll('#wb-bind-global-selected .wb-bind-selected-item'),
-        ).map((el) => el.dataset.val);
+        ).map((el) => el.dataset.val).filter(Boolean);
 
         await setBinding('primary', primary, !!primary);
 
@@ -600,13 +760,17 @@ const Actions = {
 
         await this.refreshContext();
         UI.renderBindingView();
+        UI.renderBookSelector();
         toastr.success('绑定已保存');
     },
 
     async createBook() {
         const name = prompt('请输入新世界书名称：');
         if (!name) return;
-        if (STATE.allBookNames.includes(name)) return toastr.warning('名称已存在');
+        if (STATE.allBookNames.includes(name)) {
+            toastr.warning('名称已存在');
+            return;
+        }
         await API.createWorldbook(name);
         await this.refreshContext();
         await this.loadBook(name);
@@ -616,7 +780,10 @@ const Actions = {
         if (!STATE.currentBookName) return;
         const newName = prompt('重命名为：', STATE.currentBookName);
         if (!newName || newName === STATE.currentBookName) return;
-        if (STATE.allBookNames.includes(newName)) return toastr.warning('目标名称已存在');
+        if (STATE.allBookNames.includes(newName)) {
+            toastr.warning('目标名称已存在');
+            return;
+        }
 
         await this.flushPendingSave();
         const old = STATE.currentBookName;
@@ -629,10 +796,12 @@ const Actions = {
     async deleteBook() {
         if (!STATE.currentBookName) return;
         if (!confirm(`确定删除世界书 "${STATE.currentBookName}" 吗？`)) return;
+
         if (STATE.debouncer) {
             clearTimeout(STATE.debouncer);
             STATE.debouncer = null;
         }
+
         await API.deleteWorldbook(STATE.currentBookName);
         STATE.currentBookName = '';
         STATE.entries = [];
@@ -668,6 +837,8 @@ const UI = {
             </div>
 
             <div class="wb-content">
+                <div id="wb-debug-box" class="wb-hidden" style="margin-bottom:8px;border:1px solid #f1c6a8;background:#fff6ef;color:#7a3f18;border-radius:10px;padding:8px;"></div>
+
                 <div id="wb-view-editor" class="wb-view-section">
                     <div class="wb-book-bar">
                         <select id="wb-book-selector" style="flex:1"></select>
@@ -803,12 +974,61 @@ const UI = {
         this.renderBindingView();
         this.renderManageView('');
         this.renderStats();
+        this.renderDebug();
 
         const prefer = STATE.bindings.char.primary || STATE.bindings.chat || STATE.allBookNames[0];
-        if (prefer) Actions.loadBook(prefer).catch((err) => {
-            console.error(err);
-            toastr.error('加载世界书失败');
-        });
+        if (prefer) {
+            Actions.loadBook(prefer).catch((err) => {
+                pushDebug(`初始加载失败: ${prefer}`, err);
+                toastr.error('加载世界书失败');
+            });
+        }
+    },
+
+    renderDebug() {
+        const box = document.getElementById('wb-debug-box');
+        if (!box) return;
+
+        if (!STATE.debugMessages.length) {
+            box.classList.add('wb-hidden');
+            box.innerHTML = '';
+            return;
+        }
+
+        const latest = STATE.debugMessages.slice(-6);
+        box.classList.remove('wb-hidden');
+        box.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                <strong>解析警告（${STATE.debugMessages.length}）</strong>
+                <div style="display:flex;gap:6px;">
+                    <button id="wb-debug-copy" class="wb-btn-rect" style="padding:4px 10px;font-size:12px;">复制日志</button>
+                    <button id="wb-debug-clear" class="wb-btn-rect" style="padding:4px 10px;font-size:12px;background:#b76a36;">清空</button>
+                </div>
+            </div>
+            <div style="margin-top:6px;font-size:12px;line-height:1.45;max-height:120px;overflow:auto;white-space:pre-wrap;">${escapeHtml(latest.join('\n'))}</div>
+        `;
+
+        const copyBtn = document.getElementById('wb-debug-copy');
+        const clearBtn = document.getElementById('wb-debug-clear');
+
+        if (copyBtn) {
+            copyBtn.onclick = async () => {
+                const text = STATE.debugMessages.join('\n');
+                try {
+                    await navigator.clipboard.writeText(text);
+                    toastr.success('日志已复制');
+                } catch (_e) {
+                    prompt('复制失败，请手动复制：', text);
+                }
+            };
+        }
+
+        if (clearBtn) {
+            clearBtn.onclick = () => {
+                STATE.debugMessages = [];
+                this.renderDebug();
+            };
+        }
     },
 
     switchView(viewName) {
@@ -901,6 +1121,7 @@ const UI = {
     renderPresetBar() {
         const sel = document.getElementById('wb-preset-selector');
         if (!sel) return;
+
         if (!STATE.currentBookName) {
             sel.innerHTML = '<option value="">先选择世界书</option>';
             return;
@@ -924,14 +1145,44 @@ const UI = {
 
         const data = STATE.entries.filter((e) => {
             if (!term) return true;
-            return String(e.comment || '').toLowerCase().includes(term);
+            return safeText(e.comment).toLowerCase().includes(term);
         });
 
+        if (!data.length) {
+            const empty = document.createElement('div');
+            empty.style.padding = '14px';
+            empty.style.color = '#7c90a7';
+            empty.style.fontSize = '13px';
+            empty.textContent = STATE.entries.length ? '没有匹配条目' : '当前世界书没有条目';
+            list.appendChild(empty);
+            this.updateSelectionInfo();
+            return;
+        }
+
         data.forEach((entry) => {
-            list.appendChild(this.createCard(entry));
+            try {
+                list.appendChild(this.createCard(entry));
+            } catch (e) {
+                pushDebug(`渲染条目失败 uid=${entry?.uid}`, e);
+                list.appendChild(this.createBrokenCard(entry, e));
+            }
         });
 
         this.updateSelectionInfo();
+    },
+
+    createBrokenCard(entry, err) {
+        const card = document.createElement('div');
+        card.className = 'wb-card';
+        card.style.borderLeft = '4px solid #df8d4f';
+        card.innerHTML = `
+            <div class="wb-card-header">
+                <div style="font-size:12px;color:#b15e2c;font-weight:700;">条目渲染失败</div>
+                <div style="font-size:12px;color:#6c7d92;margin-top:4px;">uid: ${escapeHtml(entry?.uid ?? 'unknown')}</div>
+                <div style="font-size:12px;color:#6c7d92;margin-top:2px;">${escapeHtml(err?.message || String(err))}</div>
+            </div>
+        `;
+        return card;
     },
 
     updateSelectionInfo() {
@@ -944,7 +1195,6 @@ const UI = {
         const enabled = !entry.disable;
         const constant = !!entry.constant;
         const selected = STATE.selectedUids.has(Number(entry.uid));
-        const posStr = WI_POSITION_MAP[Number(entry.position ?? 1)] || 'after_character_definition';
 
         const posOptions = [
             ['before_character_definition', '角色定义之前'],
@@ -959,51 +1209,83 @@ const UI = {
         const card = document.createElement('div');
         card.className = `wb-card ${enabled ? '' : 'disabled'} ${constant ? 'type-blue' : 'type-green'}`;
         card.dataset.uid = String(entry.uid);
+        card.style.display = 'block';
+        card.style.minHeight = '82px';
 
         card.innerHTML = `
             <div class="wb-card-header">
                 <div style="display:flex;flex-direction:column;gap:8px;">
                     <div class="wb-row">
-                        <input type="checkbox" class="wb-select-entry" ${selected ? 'checked' : ''} title="多选">
-                        <input class="wb-inp-title inp-name" value="${escapeHtml(entry.comment || '')}" placeholder="条目名称">
-                        <span class="wb-token-display">${tokenCount(entry.content || '')}</span>
+                        <input type="checkbox" class="wb-select-entry" title="多选">
+                        <input class="wb-inp-title inp-name" placeholder="条目名称">
+                        <span class="wb-token-display"></span>
                         <i class="fa-solid fa-eye btn-edit" title="编辑内容"></i>
                         <i class="fa-solid fa-trash btn-delete" title="删除条目"></i>
                     </div>
                     <div class="wb-row">
                         <label class="wb-switch" title="启用/禁用">
-                            <input type="checkbox" class="inp-enable" ${enabled ? 'checked' : ''}>
+                            <input type="checkbox" class="inp-enable">
                             <span class="wb-slider purple"></span>
                         </label>
                         <label class="wb-switch" title="常驻/非常驻">
-                            <input type="checkbox" class="inp-constant" ${constant ? 'checked' : ''}>
+                            <input type="checkbox" class="inp-constant">
                             <span class="wb-slider blue"></span>
                         </label>
-                        <select class="wb-input-dark inp-pos">
-                            ${posOptions.map(([v, t]) => `<option value="${v}" ${v === posStr ? 'selected' : ''}>${t}</option>`).join('')}
-                        </select>
-                        <input type="number" class="wb-inp-num inp-depth" value="${Number(entry.depth ?? 4)}" title="深度">
-                        <input type="number" class="wb-inp-num inp-order" value="${Number(entry.order ?? 0)}" title="顺序">
-                        <span style="font-size:12px;color:#6b7f98;min-width:95px;text-align:right;">${escapeHtml(getPosLabel(entry))}</span>
+                        <select class="wb-input-dark inp-pos"></select>
+                        <input type="number" class="wb-inp-num inp-depth" title="深度">
+                        <input type="number" class="wb-inp-num inp-order" title="顺序">
+                        <span class="wb-pos-label" style="font-size:12px;color:#6b7f98;min-width:95px;text-align:right;"></span>
                     </div>
                 </div>
             </div>
         `;
 
-        const bind = (selector, eventName, fn) => {
-            const el = card.querySelector(selector);
-            if (el) el.addEventListener(eventName, fn);
-        };
+        const inpSelect = card.querySelector('.wb-select-entry');
+        const inpName = card.querySelector('.inp-name');
+        const tokenEl = card.querySelector('.wb-token-display');
+        const inpEnable = card.querySelector('.inp-enable');
+        const inpConstant = card.querySelector('.inp-constant');
+        const inpPos = card.querySelector('.inp-pos');
+        const inpDepth = card.querySelector('.inp-depth');
+        const inpOrder = card.querySelector('.inp-order');
+        const posLabel = card.querySelector('.wb-pos-label');
 
-        bind('.wb-select-entry', 'change', (e) => Actions.select(entry.uid, e.target.checked));
-        bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
+        inpSelect.checked = selected;
+        inpName.value = safeText(entry.comment || '');
+        tokenEl.textContent = String(tokenCount(entry.content || ''));
+        inpEnable.checked = enabled;
+        inpConstant.checked = constant;
 
-        bind('.inp-enable', 'change', (e) => {
-            Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; });
+        posOptions.forEach(([v, t]) => {
+            const op = document.createElement('option');
+            op.value = v;
+            op.textContent = t;
+            inpPos.appendChild(op);
+        });
+
+        const posStr = WI_POSITION_MAP[toNum(entry.position, 1)] || 'after_character_definition';
+        inpPos.value = posStr;
+
+        inpDepth.value = String(toNum(entry.depth, 4));
+        inpOrder.value = String(toNum(entry.order, 0));
+        posLabel.textContent = getPosLabel(entry);
+
+        inpSelect.addEventListener('change', (e) => Actions.select(entry.uid, e.target.checked));
+
+        inpName.addEventListener('input', (e) => {
+            Actions.updateEntry(entry.uid, (d) => {
+                d.comment = e.target.value;
+            });
+        });
+
+        inpEnable.addEventListener('change', (e) => {
+            Actions.updateEntry(entry.uid, (d) => {
+                d.disable = !e.target.checked;
+            });
             this.renderEntryList(STATE.searchText);
         });
 
-        bind('.inp-constant', 'change', (e) => {
+        inpConstant.addEventListener('change', (e) => {
             Actions.updateEntry(entry.uid, (d) => {
                 d.constant = !!e.target.checked;
                 d.selective = !d.constant;
@@ -1011,22 +1293,28 @@ const UI = {
             this.renderEntryList(STATE.searchText);
         });
 
-        bind('.inp-pos', 'change', (e) => {
+        inpPos.addEventListener('change', (e) => {
             Actions.updateEntry(entry.uid, (d) => {
                 d.position = WI_POSITION_MAP_REV[e.target.value] ?? 1;
             });
+            posLabel.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
         });
 
-        bind('.inp-depth', 'input', (e) => {
-            Actions.updateEntry(entry.uid, (d) => { d.depth = Number(e.target.value || 0); });
+        inpDepth.addEventListener('input', (e) => {
+            Actions.updateEntry(entry.uid, (d) => {
+                d.depth = Math.max(0, toNum(e.target.value, 0));
+            });
+            posLabel.textContent = getPosLabel(Actions.getEntry(entry.uid) || entry);
         });
 
-        bind('.inp-order', 'input', (e) => {
-            Actions.updateEntry(entry.uid, (d) => { d.order = Number(e.target.value || 0); });
+        inpOrder.addEventListener('input', (e) => {
+            Actions.updateEntry(entry.uid, (d) => {
+                d.order = toNum(e.target.value, 0);
+            });
         });
 
-        bind('.btn-delete', 'click', () => Actions.deleteEntry(entry.uid));
-        bind('.btn-edit', 'click', () => this.openContentPopup(entry));
+        card.querySelector('.btn-delete').addEventListener('click', () => Actions.deleteEntry(entry.uid));
+        card.querySelector('.btn-edit').addEventListener('click', () => this.openContentPopup(entry));
 
         return card;
     },
@@ -1035,17 +1323,14 @@ const UI = {
         const old = document.getElementById('wb-content-popup-overlay');
         if (old) old.remove();
 
-        let tempContent = entry.content || '';
-        let tempKeys = (entry.key || []).join(',');
-
         const overlay = document.createElement('div');
         overlay.id = 'wb-content-popup-overlay';
         overlay.className = 'wb-modal-overlay';
         overlay.innerHTML = `
             <div class="wb-content-popup">
-                <div class="wb-popup-header">${escapeHtml(entry.comment || '条目')}</div>
-                <input class="wb-popup-input-keys" placeholder="关键词（英文逗号分隔）" value="${escapeHtml(tempKeys)}">
-                <textarea class="wb-popup-textarea" placeholder="内容...">${escapeHtml(tempContent)}</textarea>
+                <div class="wb-popup-header"></div>
+                <input class="wb-popup-input-keys" placeholder="关键词（英文逗号分隔）">
+                <textarea class="wb-popup-textarea" placeholder="内容..."></textarea>
                 <div class="wb-popup-footer">
                     <button class="wb-btn-black btn-cancel">取消</button>
                     <button class="wb-btn-black btn-save">保存</button>
@@ -1054,19 +1339,24 @@ const UI = {
         `;
         document.body.appendChild(overlay);
 
-        const textarea = overlay.querySelector('.wb-popup-textarea');
+        const header = overlay.querySelector('.wb-popup-header');
         const keyInput = overlay.querySelector('.wb-popup-input-keys');
+        const textarea = overlay.querySelector('.wb-popup-textarea');
 
-        textarea.oninput = (e) => { tempContent = e.target.value; };
-        keyInput.oninput = (e) => { tempKeys = e.target.value; };
+        header.textContent = safeText(entry.comment || '条目');
+        keyInput.value = ensureArray(entry.key).join(',');
+        textarea.value = safeText(entry.content || '');
 
         const close = () => overlay.remove();
 
         overlay.querySelector('.btn-cancel').onclick = close;
         overlay.querySelector('.btn-save').onclick = () => {
             Actions.updateEntry(entry.uid, (d) => {
-                d.content = tempContent;
-                d.key = tempKeys.split(',').map((v) => v.trim()).filter(Boolean);
+                d.content = textarea.value;
+                d.key = keyInput.value
+                    .split(',')
+                    .map((v) => v.trim())
+                    .filter(Boolean);
             });
             this.renderEntryList(STATE.searchText);
             this.renderStats();
@@ -1087,10 +1377,10 @@ const UI = {
         return html;
     },
 
-    filterAddSelector(selectEl, allNames, selectedSet, searchKeyword) {
-        const keyword = String(searchKeyword || '').toLowerCase().trim();
+    filterAddSelector(selectEl, allNames, selectedSet, keyword) {
+        const k = safeText(keyword).toLowerCase().trim();
         const candidates = allNames.filter((name) => !selectedSet.has(name));
-        const finalList = keyword ? candidates.filter((n) => n.toLowerCase().includes(keyword)) : candidates;
+        const finalList = k ? candidates.filter((n) => n.toLowerCase().includes(k)) : candidates;
 
         let html = '<option value="">选择要添加的世界书...</option>';
         finalList.forEach((n) => {
@@ -1102,7 +1392,7 @@ const UI = {
     renderBindingSelectedList(container, names, onRemove, onJump) {
         container.innerHTML = '';
         if (!names.length) {
-            container.innerHTML = `<div style="font-size:12px;color:#8599b3;padding:8px;">暂无启用项</div>`;
+            container.innerHTML = '<div style="font-size:12px;color:#8599b3;padding:8px;">暂无启用项</div>';
             return;
         }
 
@@ -1121,20 +1411,37 @@ const UI = {
             row.style.border = '1px solid #dfe8f4';
             row.style.cursor = 'pointer';
 
-            row.innerHTML = `
-                <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;">${escapeHtml(name)}</span>
-                <span style="display:flex;align-items:center;gap:6px;">
-                    <i class="fa-solid fa-eye wb-bind-jump" title="双击打开"></i>
-                    <i class="fa-solid fa-xmark wb-bind-remove" title="移除"></i>
-                </span>
-            `;
+            const text = document.createElement('span');
+            text.style.whiteSpace = 'nowrap';
+            text.style.overflow = 'hidden';
+            text.style.textOverflow = 'ellipsis';
+            text.style.flex = '1';
+            text.textContent = name;
+
+            const actions = document.createElement('span');
+            actions.style.display = 'flex';
+            actions.style.alignItems = 'center';
+            actions.style.gap = '6px';
+
+            const jump = document.createElement('i');
+            jump.className = 'fa-solid fa-eye wb-bind-jump';
+            jump.title = '双击打开';
+
+            const remove = document.createElement('i');
+            remove.className = 'fa-solid fa-xmark wb-bind-remove';
+            remove.title = '移除';
+
+            actions.appendChild(jump);
+            actions.appendChild(remove);
+            row.appendChild(text);
+            row.appendChild(actions);
 
             row.ondblclick = () => onJump(name);
-            row.querySelector('.wb-bind-jump').ondblclick = (e) => {
+            jump.ondblclick = (e) => {
                 e.stopPropagation();
                 onJump(name);
             };
-            row.querySelector('.wb-bind-remove').onclick = (e) => {
+            remove.onclick = (e) => {
                 e.stopPropagation();
                 onRemove(name);
             };
@@ -1152,6 +1459,13 @@ const UI = {
 
         const primarySel = view.querySelector('#wb-bind-char-primary');
         const chatSel = view.querySelector('#wb-bind-chat');
+        const charSelectedWrap = view.querySelector('#wb-bind-char-selected');
+        const globalSelectedWrap = view.querySelector('#wb-bind-global-selected');
+        const charAddSelector = view.querySelector('#wb-bind-char-add-selector');
+        const globalAddSelector = view.querySelector('#wb-bind-global-add-selector');
+        const charAddSearch = view.querySelector('#wb-bind-char-add-search');
+        const globalAddSearch = view.querySelector('#wb-bind-global-add-search');
+
         primarySel.innerHTML = this.buildSelectOptions(all, char.primary || '', true);
         chatSel.innerHTML = this.buildSelectOptions(all, chat || '', true);
 
@@ -1161,13 +1475,6 @@ const UI = {
         chatSel.ondblclick = () => {
             if (chatSel.value) Actions.jumpToEditor(chatSel.value);
         };
-
-        const charSelectedWrap = view.querySelector('#wb-bind-char-selected');
-        const globalSelectedWrap = view.querySelector('#wb-bind-global-selected');
-        const charAddSelector = view.querySelector('#wb-bind-char-add-selector');
-        const globalAddSelector = view.querySelector('#wb-bind-global-add-selector');
-        const charAddSearch = view.querySelector('#wb-bind-char-add-search');
-        const globalAddSearch = view.querySelector('#wb-bind-global-add-search');
 
         let selectedCharAdditional = [...(char.additional || [])];
         let selectedGlobal = [...(global || [])];
@@ -1179,7 +1486,6 @@ const UI = {
                 (name) => {
                     selectedCharAdditional = selectedCharAdditional.filter((n) => n !== name);
                     rerender();
-                    Actions.saveBindings().catch(console.error);
                 },
                 (name) => Actions.jumpToEditor(name),
             );
@@ -1190,7 +1496,6 @@ const UI = {
                 (name) => {
                     selectedGlobal = selectedGlobal.filter((n) => n !== name);
                     rerender();
-                    Actions.saveBindings().catch(console.error);
                 },
                 (name) => Actions.jumpToEditor(name),
             );
@@ -1210,50 +1515,72 @@ const UI = {
         };
 
         charAddSearch.oninput = () => {
-            this.filterAddSelector(
-                charAddSelector,
-                all,
-                new Set(selectedCharAdditional),
-                charAddSearch.value || '',
-            );
+            this.filterAddSelector(charAddSelector, all, new Set(selectedCharAdditional), charAddSearch.value || '');
         };
         globalAddSearch.oninput = () => {
-            this.filterAddSelector(
-                globalAddSelector,
-                all,
-                new Set(selectedGlobal),
-                globalAddSearch.value || '',
-            );
+            this.filterAddSelector(globalAddSelector, all, new Set(selectedGlobal), globalAddSearch.value || '');
         };
 
         charAddSelector.onchange = () => {
             const v = charAddSelector.value;
             if (!v) return;
             if (!selectedCharAdditional.includes(v)) selectedCharAdditional.push(v);
-
-            const host = view.querySelector('#wb-bind-char-selected');
-            host.innerHTML = selectedCharAdditional.map((n) => `<div class="wb-bind-selected-item" data-val="${escapeHtml(n)}"></div>`).join('');
-            rerender();
-            Actions.saveBindings().catch(console.error);
             charAddSelector.value = '';
+            rerender();
         };
 
         globalAddSelector.onchange = () => {
             const v = globalAddSelector.value;
             if (!v) return;
             if (!selectedGlobal.includes(v)) selectedGlobal.push(v);
-
-            const host = view.querySelector('#wb-bind-global-selected');
-            host.innerHTML = selectedGlobal.map((n) => `<div class="wb-bind-selected-item" data-val="${escapeHtml(n)}"></div>`).join('');
-            rerender();
-            Actions.saveBindings().catch(console.error);
             globalAddSelector.value = '';
+            rerender();
         };
 
-        primarySel.onchange = () => Actions.saveBindings().catch(console.error);
-        chatSel.onchange = () => Actions.saveBindings().catch(console.error);
+        // 把当前选择写回 DOM，saveBindings 直接从 DOM 读
+        const syncSelectedToDom = () => {
+            charSelectedWrap.innerHTML = '';
+            selectedCharAdditional.forEach((n) => {
+                const el = document.createElement('div');
+                el.className = 'wb-bind-selected-item wb-hidden-sync';
+                el.dataset.val = n;
+                el.style.display = 'none';
+                charSelectedWrap.appendChild(el);
+            });
+
+            globalSelectedWrap.innerHTML = '';
+            selectedGlobal.forEach((n) => {
+                const el = document.createElement('div');
+                el.className = 'wb-bind-selected-item wb-hidden-sync';
+                el.dataset.val = n;
+                el.style.display = 'none';
+                globalSelectedWrap.appendChild(el);
+            });
+        };
+
+        const originalRenderBindingSelectedList = this.renderBindingSelectedList.bind(this);
+        this.renderBindingSelectedList = (container, names, onRemove, onJump) => {
+            originalRenderBindingSelectedList(container, names, onRemove, onJump);
+            if (container === charSelectedWrap || container === globalSelectedWrap) {
+                // 保证有可见项的同时，也有标准 class + data-val 节点给 saveBindings 读取
+                names.forEach((n) => {
+                    const exists = Array.from(container.querySelectorAll('.wb-bind-selected-item')).some((el) => el.dataset.val === n);
+                    if (!exists) {
+                        const h = document.createElement('div');
+                        h.className = 'wb-bind-selected-item';
+                        h.dataset.val = n;
+                        h.style.display = 'none';
+                        container.appendChild(h);
+                    }
+                });
+            }
+        };
 
         rerender();
+        syncSelectedToDom();
+
+        // 恢复函数，避免影响其它地方
+        this.renderBindingSelectedList = originalRenderBindingSelectedList;
     },
 
     renderManageView(filterText = '') {
@@ -1261,7 +1588,7 @@ const UI = {
         if (!container) return;
         container.innerHTML = '';
 
-        const term = String(filterText || '').toLowerCase();
+        const term = safeText(filterText).toLowerCase();
         const list = STATE.allBookNames.filter((n) => !term || n.toLowerCase().includes(term));
 
         list.forEach((name) => {
@@ -1305,7 +1632,10 @@ const UI = {
     },
 
     openStitchModal() {
-        if (!STATE.allBookNames.length) return toastr.warning('没有可用世界书');
+        if (!STATE.allBookNames.length) {
+            toastr.warning('没有可用世界书');
+            return;
+        }
 
         const sideState = {
             mode: 'copy',
@@ -1357,8 +1687,7 @@ const UI = {
 
         const getSide = (key) => sideState[key];
         const otherKey = (k) => (k === 'left' ? 'right' : 'left');
-
-        const getNextUid = (arr) => arr.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
+        const getNextUid = (arr) => arr.reduce((m, e) => Math.max(m, toNum(e.uid, 0)), -1) + 1;
 
         const renderSide = (key) => {
             const side = getSide(key);
@@ -1369,8 +1698,8 @@ const UI = {
                 options += `<option value="${escapeHtml(n)}" ${n === side.book ? 'selected' : ''}>${escapeHtml(n)}</option>`;
             });
 
-            const term = String(side.keyword || '').toLowerCase().trim();
-            const visible = side.entries.filter((e) => !term || String(e.comment || '').toLowerCase().includes(term));
+            const term = safeText(side.keyword).toLowerCase().trim();
+            const visible = side.entries.filter((e) => !term || safeText(e.comment).toLowerCase().includes(term));
 
             const htmlItems = visible.map((e) => {
                 const checked = side.selected.has(Number(e.uid));
@@ -1379,7 +1708,7 @@ const UI = {
                         <input type="checkbox" data-check="${e.uid}" ${checked ? 'checked' : ''}>
                         <div style="min-width:0;flex:1;">
                             <div style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(e.comment || '(无标题)')}</div>
-                            <div style="font-size:12px;color:#6b7f98;">${escapeHtml(getPosLabel(e))} · order ${Number(e.order ?? 0)} · ${e.disable ? '关闭' : '开启'}</div>
+                            <div style="font-size:12px;color:#6b7f98;">${escapeHtml(getPosLabel(e))} · order ${toNum(e.order, 0)} · ${e.disable ? '关闭' : '开启'}</div>
                         </div>
                     </div>
                 `;
@@ -1427,6 +1756,7 @@ const UI = {
                 side.entries.forEach((e) => side.selected.add(Number(e.uid)));
                 renderSide(key);
             };
+
             panel.querySelector(`[data-invert="${key}"]`).onclick = () => {
                 side.entries.forEach((e) => {
                     const id = Number(e.uid);
@@ -1435,6 +1765,7 @@ const UI = {
                 });
                 renderSide(key);
             };
+
             panel.querySelector(`[data-clear="${key}"]`).onclick = () => {
                 side.selected.clear();
                 renderSide(key);
@@ -1453,7 +1784,7 @@ const UI = {
                 const src = side.entries.find((e) => Number(e.uid) === Number(uidNum));
                 if (!src) return;
 
-                const clone = structuredClone(src);
+                const clone = cloneData(src);
                 clone.uid = getNextUid(other.entries);
                 other.entries.push(clone);
                 normalizeOrder(other.entries);
@@ -1472,11 +1803,16 @@ const UI = {
 
             const transferSelected = async (mode) => {
                 const ids = [...side.selected];
-                if (!ids.length) return toastr.warning('请先选择条目');
+                if (!ids.length) {
+                    toastr.warning('请先选择条目');
+                    return;
+                }
+
                 for (const id of ids) {
                     // eslint-disable-next-line no-await-in-loop
                     await transferOne(id, mode);
                 }
+
                 side.selected.clear();
                 renderSide(key);
                 renderSide(otherKey(key));
@@ -1487,7 +1823,10 @@ const UI = {
             panel.querySelector(`[data-move="${key}"]`).onclick = () => transferSelected('move');
 
             panel.querySelector(`[data-edit="${key}"]`).onclick = async () => {
-                if (side.selected.size !== 1) return toastr.warning('编辑时请只选择一个条目');
+                if (side.selected.size !== 1) {
+                    toastr.warning('编辑时请只选择一个条目');
+                    return;
+                }
                 const id = [...side.selected][0];
                 const item = side.entries.find((e) => Number(e.uid) === Number(id));
                 if (!item) return;
@@ -1504,7 +1843,10 @@ const UI = {
             };
 
             panel.querySelector(`[data-del="${key}"]`).onclick = async () => {
-                if (!side.selected.size) return toastr.warning('请先选择条目');
+                if (!side.selected.size) {
+                    toastr.warning('请先选择条目');
+                    return;
+                }
                 if (!confirm(`删除 ${side.selected.size} 个条目？`)) return;
 
                 side.entries = side.entries.filter((e) => !side.selected.has(Number(e.uid)));
@@ -1527,7 +1869,7 @@ const UI = {
                 const src = from.entries.find((it) => String(it.uid) === String(uid));
                 if (!src) return;
 
-                const copy = structuredClone(src);
+                const copy = cloneData(src);
                 copy.uid = getNextUid(to.entries);
                 to.entries.push(copy);
                 normalizeOrder(to.entries);
@@ -1567,7 +1909,7 @@ const UI = {
         };
 
         initLoad().catch((err) => {
-            console.error(err);
+            pushDebug('加载缝合面板失败', err);
             toastr.error('加载缝合面板失败');
         });
     },
@@ -1596,6 +1938,10 @@ jQuery(async () => {
     };
 
     injectButton();
-    await Actions.init();
-    console.log('[Enhanced WB] loaded');
+    try {
+        await Actions.init();
+        console.log('[Enhanced WB] loaded');
+    } catch (e) {
+        pushDebug('初始化失败', e);
+    }
 });
