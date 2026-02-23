@@ -8,7 +8,7 @@ import {
 } from '../../../world-info.js';
 
 const CONFIG = {
-    id: 'enhanced-wb-panel-v3', // 保持 v3 ID 以匹配你的 CSS
+    id: 'enhanced-wb-panel-v3', // 保持与CSS一致
     btnId: 'wb-menu-btn-v3',
     settingsKey: 'WorldbookEditor_Metadata',
     colors: { accent: '#7c5cbd' }
@@ -649,7 +649,7 @@ const UI = {
     }
 };
 
-// [修复] 移植了 V6 版本稳健的按钮注入和初始化逻辑
+// [修复] 移植 V6 版本稳健的按钮注入和初始化逻辑
 jQuery(async () => {
 
     const injectButton = () => {
