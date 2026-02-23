@@ -1,224 +1,539 @@
-/* === 核心：容器样式 === */
-#enhanced-wb-panel-v6 {
-    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-    background-color: #fcfcfc; /* 整体背景微调 */
+/*
+    SillyTavern Worldbook Suite - Style Sheet
+    - Based on user request
+    - Colors: #66ccff (Accent), #FFFFF0 (Ivory/Cream), #FFFFFF (Base)
+    - Responsive for PC & Mobile
+*/
+
+/* === 全局与核心容器 === */
+#worldbook-suite-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: rgba(255, 255, 240, 0.8); /* 浅奶黄色背景，带透明度 */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     color: #374151;
-    z-index: 20000; display: flex; flex-direction: column;
-    font-family: 'Segoe UI', sans-serif;
+    z-index: 20000;
+    display: flex;
+    flex-direction: column;
+    font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    opacity: 0;
+    animation: wsFadeIn 0.3s ease-out forwards;
+}
+
+@keyframes wsFadeIn {
+    to { opacity: 1; }
+}
+
+#worldbook-suite-panel *,
+#worldbook-suite-panel *::before,
+#worldbook-suite-panel *::after {
     box-sizing: border-box;
 }
 
-#enhanced-wb-panel-v6 *, .wb-modal-overlay *, .wb-gr-dropdown *, .wb-tooltip { box-sizing: border-box; }
-
-/* 滚动条美化 - 统一使用主色调 */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background-color: rgba(102, 204, 255, 0.3); border-radius: 10px; }
-::-webkit-scrollbar-thumb:hover { background-color: rgba(102, 204, 255, 0.6); }
-
-#enhanced-wb-panel-v6 .wb-hidden { display: none !important; }
-
-/* === 顶部栏 === */
-#enhanced-wb-panel-v6 .wb-header-bar { 
-    height: 50px; background: #fff; border-bottom: 1px solid #f0f0f0;
-    display: flex; align-items: center; justify-content: center; 
-    position: relative; padding-top: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.02);
+#worldbook-suite-panel ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
 }
-#enhanced-wb-panel-v6 .wb-header-close { 
-    position: absolute; right: 20px; top: 12px; cursor: pointer; 
-    color: #9ca3af; font-size: 1.4em; transition: 0.2s; 
+#worldbook-suite-panel ::-webkit-scrollbar-track {
+    background: transparent;
 }
-#enhanced-wb-panel-v6 .wb-header-close:hover { color: #ef4444; transform: rotate(90deg); }
+#worldbook-suite-panel ::-webkit-scrollbar-thumb {
+    background-color: rgba(102, 204, 255, 0.3);
+    border-radius: 10px;
+}
+#worldbook-suite-panel ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(102, 204, 255, 0.6);
+}
 
-/* 胶囊菜单栏 - 配色更新 */
-#enhanced-wb-panel-v6 .wb-tabs {
-    position: relative; display: inline-flex;
-    background: #fdfdfd; border: 1px solid #e5e7eb;
-    border-radius: 30px; padding: 4px;
-    box-shadow: 0 2px 6px rgba(102, 204, 255, 0.1);
+.ws-hidden {
+    display: none !important;
 }
-#enhanced-wb-panel-v6 .wb-tab {
-    position: relative; z-index: 2; padding: 6px 20px;
-    cursor: pointer; color: #64748b; font-weight: 600; font-size: 0.95em;
-    display: flex; align-items: center; gap: 8px; border-radius: 20px;
-    transition: color 0.3s;
-}
-#enhanced-wb-panel-v6 .wb-tab:hover { color: #66ccff; }
-#enhanced-wb-panel-v6 .wb-tab.active { color: #fff; }
 
-/* 滑动胶囊背景 - 主色调 */
-#enhanced-wb-panel-v6 .wb-tab-glider {
-    position: absolute; top: 4px; left: 0; height: calc(100% - 8px);
-    background: linear-gradient(135deg, #66ccff 0%, #4db8ff 100%);
-    border-radius: 20px; z-index: 1; pointer-events: none;
-    box-shadow: 0 2px 8px rgba(102, 204, 255, 0.4);
+/* === 顶部导航栏 === */
+.ws-header {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 10px 15px;
+    position: relative;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
 }
-#enhanced-wb-panel-v6 .wb-tab-glider.wb-glider-animating {
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), width 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+.ws-close-button {
+    position: absolute;
+    right: 15px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 1.5em;
+    color: #9ca3af;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.ws-close-button:hover {
+    color: #ef4444;
+}
+
+.ws-tabs {
+    display: flex;
+    background-color: #fff;
+    border-radius: 20px;
+    padding: 4px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    position: relative;
+}
+
+.ws-tab {
+    padding: 6px 18px;
+    font-size: 0.9em;
+    font-weight: 600;
+    color: #6b7280;
+    cursor: pointer;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: color 0.3s ease;
+    z-index: 2;
+    white-space: nowrap;
+}
+.ws-tab.active {
+    color: #fff;
+}
+.ws-tab:not(.active):hover {
+    color: #374151;
+}
+
+.ws-tab-glider {
+    position: absolute;
+    top: 4px;
+    height: calc(100% - 8px);
+    background-color: #66ccff;
+    border-radius: 16px;
+    box-shadow: 0 2px 5px rgba(102, 204, 255, 0.4);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    z-index: 1;
 }
 
 /* === 主内容区 === */
-#enhanced-wb-panel-v6 .wb-content { flex: 1; display: flex; flex-direction: column; padding: 15px; overflow: hidden; max-width: 1200px; margin: 0 auto; width: 100%; position: relative; }
-#enhanced-wb-panel-v6 .wb-view-section { flex: 1; display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
-
-/* === 视图通用控件 === */
-#enhanced-wb-panel-v6 .wb-btn-circle {
-    width: 36px; height: 36px; border-radius: 50%;
-    border: 1px solid #e0f2fe; background: #f0f9ff; color: #0ea5e9;
-    display: flex; align-items: center; justify-content: center;
-    cursor: pointer; transition: all 0.2s; font-size: 1em;
-}
-#enhanced-wb-panel-v6 .wb-btn-circle:hover { 
-    background: #66ccff; color: #fff; border-color: #66ccff; 
-    transform: translateY(-2px); box-shadow: 0 4px 10px rgba(102, 204, 255, 0.3);
-}
-#enhanced-wb-panel-v6 .wb-btn-circle.danger:hover { background: #ef4444; border-color: #ef4444; }
-
-/* 输入框统一风格 */
-#enhanced-wb-panel-v6 input, #enhanced-wb-panel-v6 select, #enhanced-wb-panel-v6 textarea {
-    background: #fff; border: 1px solid #e2e8f0; border-radius: 8px;
-    padding: 8px 12px; font-size: 0.9em; outline: none; transition: 0.2s;
-    color: #334155;
-}
-#enhanced-wb-panel-v6 input:focus, #enhanced-wb-panel-v6 textarea:focus {
-    border-color: #66ccff; box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.15);
+.ws-main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    max-width: 1000px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 15px;
 }
 
-/* === 视图 1: 编辑器 === */
-#enhanced-wb-panel-v6 .wb-book-bar { margin-bottom: 10px; display: flex; gap: 15px; align-items: center; flex-shrink: 0; }
-#enhanced-wb-panel-v6 .wb-tool-bar { 
-    display: flex; gap: 10px; margin-bottom: 10px; align-items: center; 
-    background: #fff8dc; /* 浅奶黄背景条 */
-    padding: 8px 15px; border-radius: 12px; border: 1px solid #fef3c7;
+.ws-view {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
 }
 
-/* 卡片样式升级 */
-#enhanced-wb-panel-v6 .wb-list { flex: 1; overflow-y: auto; padding-right: 5px; padding-bottom: 60px; display: flex; flex-direction: column; gap: 12px; }
-#enhanced-wb-panel-v6 .wb-card {
-    background: #ffffff; border: 1px solid #f1f5f9; border-radius: 10px;
-    display: flex; flex-direction: column; overflow: visible;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.03); transition: all 0.2s;
-    position: relative;
+/* === 编辑器视图通用控件 === */
+.ws-input, .ws-select {
+    background-color: #fff;
+    border: 1px solid #e5e7eb;
+    color: #374151;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 0.9em;
+    outline: none;
+    transition: all 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 }
-#enhanced-wb-panel-v6 .wb-card:hover { box-shadow: 0 8px 16px rgba(0,0,0,0.06); transform: translateY(-1px); }
+.ws-input:focus, .ws-select:focus {
+    border-color: #66ccff;
+    box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.2);
+}
 
-/* 左侧状态条 */
-#enhanced-wb-panel-v6 .wb-card.type-green { border-left: 4px solid #86efac; } /* 启用 */
-#enhanced-wb-panel-v6 .wb-card.type-blue { border-left: 4px solid #66ccff; }  /* 常驻 */
-#enhanced-wb-panel-v6 .wb-card.disabled { border-left: 4px solid #e5e7eb; opacity: 0.8; }
-#enhanced-wb-panel-v6 .wb-card.selected { border-color: #66ccff; background-color: #f0f9ff; } /* 选中状态 */
+.ws-button {
+    background-color: #fff;
+    border: 1px solid #e5e7eb;
+    color: #374151;
+    padding: 8px 15px;
+    border-radius: 8px;
+    font-size: 0.9em;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.2s;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.ws-button:hover {
+    border-color: #d1d5db;
+    background-color: #f9fafb;
+    transform: translateY(-1px);
+}
+.ws-button.primary {
+    background-color: #66ccff;
+    border-color: #66ccff;
+    color: #fff;
+}
+.ws-button.primary:hover {
+    background-color: #52a9ff;
+    border-color: #52a9ff;
+    box-shadow: 0 4px 10px rgba(102, 204, 255, 0.3);
+}
 
-#enhanced-wb-panel-v6 .wb-card-header { display: flex; padding: 12px; gap: 12px; align-items: flex-start; }
+/* === 编辑器视图 (`#ws-view-editor`) === */
+.ws-editor-toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 15px;
+    align-items: center;
+    flex-wrap: wrap; /* 移动端换行 */
+}
+.ws-book-selector {
+    flex: 1;
+    min-width: 200px;
+}
+.ws-search-input {
+    min-width: 180px;
+}
 
-/* 批量选择复选框 */
-.wb-check-container {
-    display: flex; align-items: center; justify-content: center;
-    padding-top: 8px; cursor: pointer;
+/* 状态快照功能 */
+.ws-state-snapshot-controls {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background-color: rgba(255,255,255,0.7);
+    padding: 4px;
+    border-radius: 10px;
 }
-.wb-checkbox {
-    width: 20px; height: 20px; border: 2px solid #cbd5e1; border-radius: 6px;
-    transition: 0.2s; position: relative; background: #fff;
+.ws-state-snapshot-controls .ws-select {
+    padding: 4px 8px;
+    font-size: 0.85em;
+    border-radius: 6px;
 }
-.wb-checkbox::after {
-    content: ''; position: absolute; top: 2px; left: 6px; width: 5px; height: 10px;
-    border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
-    opacity: 0; transition: 0.2s;
+.ws-state-snapshot-controls .ws-button {
+    padding: 4px;
+    width: 28px;
+    height: 28px;
+    font-size: 1em;
+    border-radius: 6px;
 }
-.wb-card.selected .wb-checkbox { background: #66ccff; border-color: #66ccff; }
-.wb-card.selected .wb-checkbox::after { opacity: 1; }
 
-/* 卡片内部布局 */
-.wb-card-main { flex: 1; display: flex; flex-direction: column; gap: 8px; }
-.wb-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.wb-inp-title { 
-    font-weight: 700; color: #334155; border: none !important; background: transparent !important; 
-    padding: 0 5px !important; font-size: 1em !important; flex: 1;
+/* 批量选择工具栏 */
+.ws-selection-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
 }
-.wb-inp-title:focus { background: #fff !important; box-shadow: none !important; border-bottom: 2px solid #66ccff !important; border-radius: 0 !important; }
 
-/* 状态标签 (Token) */
-.wb-token-display {
-    margin-left: auto; font-size: 0.85em; font-weight: bold;
-    padding: 2px 10px; border-radius: 12px; min-width: 40px; text-align: center;
+.ws-entry-list-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 5px;
+    margin: -5px;
 }
-.wb-card.type-green .wb-token-display { background: #dcfce7; color: #166534; }
-.wb-card.type-blue .wb-token-display { background: #e0f2fe; color: #0369a1; }
-.wb-card.disabled .wb-token-display { background: #f1f5f9; color: #94a3b8; }
+.ws-entry-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
 
-/* === 批量操作栏 (Floating Bottom Bar) === */
-#wb-batch-bar {
-    position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(150%);
-    background: #fff; padding: 10px 20px; border-radius: 50px;
-    box-shadow: 0 10px 25px rgba(0,0,0,0.15); border: 1px solid #e0f2fe;
-    display: flex; gap: 15px; align-items: center; z-index: 100;
-    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-    min-width: 300px; justify-content: center;
+/* 单个世界书条目卡片 */
+.ws-entry-card {
+    background-color: #fff;
+    border-radius: 10px;
+    border: 1px solid #f0f0f0;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.04);
+    display: flex;
+    padding: 12px;
+    gap: 10px;
+    align-items: center;
+    transition: all 0.2s;
 }
-#wb-batch-bar.show { transform: translateX(-50%) translateY(0); }
-.wb-batch-info { font-weight: bold; color: #66ccff; margin-right: 10px; font-size: 0.9em; }
-.wb-batch-divider { width: 1px; height: 20px; background: #e2e8f0; }
+.ws-entry-card.selected {
+    border-color: #66ccff;
+    box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.3), 0 2px 5px rgba(0,0,0,0.04);
+}
+.ws-entry-card.disabled {
+    opacity: 0.6;
+    background-color: #f9fafb;
+}
 
-/* === 预设菜单 === */
-.wb-preset-menu {
-    position: absolute; top: 100%; right: 0; background: #fff;
-    border: 1px solid #e2e8f0; border-radius: 12px; padding: 10px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.1); width: 280px; z-index: 200;
-    display: none; animation: slideDown 0.2s;
+.ws-entry-checkbox {
+    flex-shrink: 0;
+    width: 18px;
+    height: 18px;
+    accent-color: #66ccff;
 }
-.wb-preset-menu.show { display: block; }
-.wb-preset-item {
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 8px 12px; border-radius: 6px; cursor: pointer; color: #475569;
-}
-.wb-preset-item:hover { background: #f0f9ff; color: #0284c7; }
-.wb-preset-header { font-weight: bold; color: #334155; margin-bottom: 8px; font-size: 0.9em; display: flex; justify-content: space-between; }
 
-/* === 缝合世界书 (Stitcher View) === */
-#wb-view-stitch {
-    display: flex; gap: 20px; height: 100%; padding-bottom: 10px;
+.ws-entry-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
 }
-.wb-stitch-panel {
-    flex: 1; display: flex; flex-direction: column; 
-    background: #fff; border-radius: 12px; border: 1px solid #f1f5f9;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden;
+.ws-entry-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
 }
-.wb-stitch-header {
-    padding: 15px; background: #fff8dc; /* 浅奶黄 */
-    border-bottom: 1px solid #fef3c7; display: flex; flex-direction: column; gap: 10px;
+.ws-entry-comment {
+    font-weight: 600;
+    color: #374151;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-.wb-stitch-list {
-    flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 8px;
-    background: #fcfcfc;
+.ws-entry-actions .ws-button {
+    padding: 2px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    font-size: 0.9em;
 }
-/* 缝合视图中的卡片简化版 */
-.wb-stitch-card {
-    background: #fff; border: 1px solid #e2e8f0; padding: 10px; border-radius: 8px;
-    font-size: 0.9em; cursor: grab; display: flex; justify-content: space-between; align-items: center;
-    transition: 0.2s; border-left: 3px solid transparent;
-}
-.wb-stitch-card:hover { border-color: #66ccff; transform: translateX(2px); }
-.wb-stitch-card.type-green { border-left-color: #86efac; }
-.wb-stitch-card.type-blue { border-left-color: #66ccff; }
-.wb-stitch-card.disabled { opacity: 0.6; background: #f8fafc; }
-.wb-stitch-card.dragging { opacity: 0.5; background: #eff6ff; border: 1px dashed #66ccff; }
 
-/* 拖拽目标高亮 */
-.wb-stitch-list.drag-over { background: #f0f9ff; box-shadow: inset 0 0 0 2px #66ccff; }
-
-/* 绑定视图的多选标签优化 */
-.wb-ms-tag { 
-    background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd;
-    border-radius: 15px; padding: 2px 10px; font-size: 0.85em; 
+.ws-entry-details {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    font-size: 0.85em;
+    color: #6b7280;
+    flex-wrap: wrap;
 }
-.wb-ms-tag-close:hover { color: #0ea5e9; }
+.ws-entry-detail-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.ws-entry-detail-item i {
+    color: #9ca3af;
+}
 
-/* 适配移动端 */
+.ws-entry-constant-toggle.active i {
+    color: #6366f1; /* Indigo for Constant */
+}
+.ws-entry-enabled-toggle.active i {
+    color: #22c55e; /* Green for Enabled */
+}
+
+
+/* 批量操作栏 */
+#ws-batch-action-bar {
+    position: fixed;
+    bottom: -100px; /* Initially hidden */
+    left: 50%;
+    transform: translateX(-50%);
+    width: auto;
+    max-width: 90vw;
+    background-color: rgba(40, 40, 40, 0.9);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    z-index: 20001;
+    transition: bottom 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+#ws-batch-action-bar.visible {
+    bottom: 20px;
+}
+#ws-batch-selection-count {
+    font-weight: 600;
+    white-space: nowrap;
+}
+.ws-batch-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.ws-batch-actions .ws-button {
+    background: transparent;
+    color: #e5e7eb;
+    border: 1px solid rgba(255,255,255,0.2);
+    font-size: 0.85em;
+    padding: 6px 10px;
+}
+.ws-batch-actions .ws-button:hover {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+}
+
+
+/* === 世界书缝合视图 (`#ws-view-stitcher`) === */
+.ws-stitcher-container {
+    display: flex;
+    gap: 15px;
+    width: 100%;
+    height: 100%;
+}
+
+.ws-stitcher-panel {
+    flex: 1;
+    min-width: 0;
+    background-color: #fff;
+    border-radius: 12px;
+    border: 1px solid #f0f0f0;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.ws-stitcher-header {
+    padding: 10px;
+    border-bottom: 1px solid #f0f0f0;
+    flex-shrink: 0;
+}
+.ws-stitcher-header .ws-select {
+    width: 100%;
+}
+
+.ws-stitcher-toolbar {
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #f0f0f0;
+    background-color: #fcfcfc;
+    flex-shrink: 0;
+}
+.ws-stitcher-toolbar .ws-input {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 0.85em;
+}
+
+.ws-stitcher-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* 缝合视图中的条目 */
+.ws-stitcher-entry {
+    background-color: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 8px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: grab;
+    transition: all 0.2s;
+    font-size: 0.9em;
+}
+.ws-stitcher-entry:active {
+    cursor: grabbing;
+}
+.ws-stitcher-entry.selected {
+    background-color: #e0f2fe; /* light sky */
+    border-color: #7dd3fc;
+    color: #0c4a6e;
+}
+.ws-stitcher-entry.dragging {
+    opacity: 0.5;
+    background: #f0f9ff;
+    transform: scale(0.98);
+}
+.ws-stitcher-entry .ws-entry-checkbox {
+    flex-shrink: 0;
+}
+.ws-stitcher-entry-name {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-stitcher-footer {
+    padding: 10px;
+    border-top: 1px solid #f0f0f0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    background-color: #fcfcfc;
+    flex-shrink: 0;
+}
+.ws-stitcher-footer .ws-button {
+    font-size: 0.85em;
+}
+
+/* 中间的操作按钮 */
+.ws-stitcher-actions {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+}
+.ws-stitcher-actions .ws-button {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    font-size: 1.2em;
+}
+
+/* 移动端适配 */
 @media (max-width: 768px) {
-    #wb-view-stitch { flex-direction: column; }
-    .wb-stitch-panel { height: 50%; }
-    #wb-batch-bar { width: 90%; bottom: 10px; flex-wrap: wrap; border-radius: 20px; }
-    .wb-tool-bar { flex-wrap: wrap; }
-    .wb-pos-wrapper { width: 100px !important; }
+    .ws-main-content {
+        padding: 10px;
+    }
+    .ws-tabs {
+        width: 100%;
+        justify-content: space-around;
+    }
+    .ws-tab {
+        font-size: 0.8em;
+        padding: 6px 10px;
+    }
+    .ws-editor-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .ws-stitcher-container {
+        flex-direction: column;
+        height: auto; /* 允许内容撑开高度 */
+    }
+    .ws-stitcher-panel {
+        min-height: 300px; /* 保证最小高度 */
+    }
+    .ws-stitcher-actions {
+        flex-direction: row;
+        transform: rotate(90deg);
+        margin: -15px 0;
+    }
+    #ws-batch-action-bar {
+        flex-direction: column;
+        gap: 10px;
+        padding: 15px;
+        border-radius: 16px 16px 0 0;
+        bottom: -200px;
+        width: 100%;
+        left: 0;
+        transform: none;
+    }
+    #ws-batch-action-bar.visible {
+        bottom: 0;
+    }
+    .ws-batch-actions {
+        flex-wrap: wrap;
+        justify-content: center;
+    }
 }
-
-@keyframes slideDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }

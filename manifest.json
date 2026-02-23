@@ -1,10 +1,13 @@
 {
-    "display_name": "Enhanced Worldbook Manager",
-    "loading_order": 10,
+    "display_name": "世界书增强套件 (Worldbook Suite)",
+    "name": "worldbook-suite",
+    "author": "AI Assistant based on User Request",
+    "version": "2.1.0",
+    "description": "集世界书编辑、绑定、管理、状态快照、批量操作、双面板缝合等功能于一体的超级工具。",
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "style.css",
-    "author": "YourName",
-    "version": "3.0.0"
+    "persistent": false,
+    "min_version": "1.11.0"
 }
