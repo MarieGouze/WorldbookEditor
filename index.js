@@ -1,7 +1,11 @@
 import { getContext } from '../../../extensions.js';
 import { event_types, eventSource } from '../../../../script.js';
 import { getCharaFilename } from '../../../utils.js';
-import { world_info, world_names, selected_world_info } from '../../../world-info.js';
+import {
+    world_info,
+    world_names,
+    selected_world_info,
+} from '../../../world-info.js';
 
 const CONFIG = {
     id: 'enhanced-wb-panel-v6',
@@ -10,9 +14,10 @@ const CONFIG = {
 };
 
 const STATE = {
-    isInitialized: false,
-    currentView: 'editor', // editor | stitch | binding | manage
+    currentView: 'editor',
     currentBookName: null,
+    isInitialized: false,
+    isManageDirty: true,
     entries: [],
     allBookNames: [],
     metadata: {},
@@ -23,8 +28,8 @@ const STATE = {
         chat: null,
     },
     debouncer: null,
-    selectedUids: new Set(),
     stitch: {
+        mode: 'copy',
         left: { book: null, entries: [], selected: new Set(), search: '' },
         right: { book: null, entries: [], selected: new Set(), search: '' },
     },
@@ -39,15 +44,16 @@ const WI_POSITION_MAP = {
     5: 'before_example_messages',
     6: 'after_example_messages',
 };
+
 const WI_POSITION_MAP_REV = Object.fromEntries(
     Object.entries(WI_POSITION_MAP).map(([k, v]) => [v, parseInt(k, 10)]),
 );
 
-function safeClone(v) {
+function cloneData(data) {
     try {
-        return structuredClone(v);
+        return structuredClone(data);
     } catch (_e) {
-        return JSON.parse(JSON.stringify(v));
+        return JSON.parse(JSON.stringify(data));
     }
 }
 
@@ -61,13 +67,24 @@ function esc(str) {
     }[m]));
 }
 
-function toNum(v, fallback = 0) {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : fallback;
+function normalizeEntry(raw, uidKey, index) {
+    const entry = cloneData(raw || {});
+    const uidFallback = Number(uidKey);
+    entry.uid = Number.isFinite(Number(entry.uid)) ? Number(entry.uid) : (Number.isFinite(uidFallback) ? uidFallback : index);
+    entry.comment = String(entry.comment ?? entry.name ?? entry.title ?? `条目 ${entry.uid}`);
+    entry.content = String(entry.content ?? '');
+    entry.key = Array.isArray(entry.key) ? entry.key : [];
+    entry.disable = !!entry.disable;
+    entry.constant = !!entry.constant;
+    entry.position = typeof entry.position === 'number' ? entry.position : 1;
+    entry.depth = Number.isFinite(Number(entry.depth)) ? Number(entry.depth) : 4;
+    entry.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : index;
+    entry.selective = typeof entry.selective === 'boolean' ? entry.selective : !entry.constant;
+    return entry;
 }
 
 /**
- * 兼容旧版：更新角色主世界书
+ * 兼容旧版 ST：更新角色主要世界书
  */
 async function charUpdatePrimaryWorld(name) {
     const context = getContext();
@@ -78,11 +95,11 @@ async function charUpdatePrimaryWorld(name) {
     if (!character) return;
 
     if (!character.data.extensions) character.data.extensions = {};
-    character.data.extensions.world = name || '';
+    character.data.extensions.world = name;
 
     const uiSelect = document.getElementById('character_world');
     if (uiSelect) {
-        uiSelect.value = name || '';
+        uiSelect.value = name;
         uiSelect.dispatchEvent(new Event('change'));
     }
 
@@ -96,12 +113,12 @@ async function charUpdatePrimaryWorld(name) {
 }
 
 /**
- * 兼容旧版：设置角色附加世界书
+ * 兼容旧版 ST：设置角色附加世界书
  */
 function charSetAuxWorlds(fileName, books) {
     const context = getContext();
-
     if (!world_info.charLore) world_info.charLore = [];
+
     const idx = world_info.charLore.findIndex((e) => e.name === fileName);
 
     if (books.length === 0) {
@@ -115,21 +132,24 @@ function charSetAuxWorlds(fileName, books) {
     if (context.saveSettingsDebounced) context.saveSettingsDebounced();
 }
 
+/**
+ * 绑定处理
+ */
 async function setCharBindings(type, worldName, isEnabled) {
     const context = getContext();
 
     if (type === 'primary') {
-        await charUpdatePrimaryWorld(isEnabled ? worldName : '');
+        const targetName = isEnabled ? worldName : '';
+        await charUpdatePrimaryWorld(targetName);
         return;
     }
 
     if (type === 'auxiliary') {
         const charId = context.characterId;
-        if (charId === undefined || charId === null) return;
+        if (!charId && charId !== 0) return;
 
         const charAvatar = context.characters[charId].avatar;
         const charFileName = getCharaFilename(null, { manualAvatarKey: charAvatar });
-
         const charLoreEntry = world_info.charLore?.find((e) => e.name === charFileName);
         let currentBooks = charLoreEntry ? [...charLoreEntry.extraBooks] : [];
 
@@ -144,9 +164,12 @@ async function setCharBindings(type, worldName, isEnabled) {
     }
 
     if (type === 'chat') {
-        if (isEnabled) context.chatMetadata.world_info = worldName;
-        else if (context.chatMetadata.world_info === worldName) delete context.chatMetadata.world_info;
-        context.saveMetadataDebounced?.();
+        if (isEnabled) {
+            context.chatMetadata.world_info = worldName;
+        } else if (context.chatMetadata.world_info === worldName) {
+            delete context.chatMetadata.world_info;
+        }
+        context.saveMetadataDebounced();
         return;
     }
 
@@ -155,7 +178,10 @@ async function setCharBindings(type, worldName, isEnabled) {
             ? `/world silent=true "${worldName}"`
             : `/world state=off silent=true "${worldName}"`;
         await context.executeSlashCommands(command);
+        return;
     }
+
+    console.warn(`未知绑定类型: ${type}`);
 }
 
 const API = {
@@ -172,11 +198,12 @@ const API = {
         if (!character) return { primary: null, additional: [] };
 
         const primary = character.data?.extensions?.world || null;
+        let additional = [];
         const fileName = character.avatar.replace(/\.[^/.]+$/, '');
 
         const charLore = world_info.charLore || [];
         const entry = charLore.find((e) => e.name === fileName);
-        const additional = entry && Array.isArray(entry.extraBooks) ? [...entry.extraBooks] : [];
+        if (entry && Array.isArray(entry.extraBooks)) additional = [...entry.extraBooks];
 
         return { primary, additional };
     },
@@ -186,41 +213,37 @@ const API = {
     },
 
     async getChatBinding() {
-        return getContext().chatMetadata?.world_info || null;
+        const context = getContext();
+        return context.chatMetadata?.world_info || null;
     },
 
     async loadBook(name) {
         const data = await getContext().loadWorldInfo(name);
         if (!data) throw new Error(`Worldbook ${name} not found`);
 
-        const safeEntries = data.entries ? safeClone(data.entries) : {};
-        const entries = Object.entries(safeEntries).map(([uid, e]) => {
-            if (e.uid === undefined || e.uid === null) e.uid = Number(uid);
-            if (e.comment === undefined) e.comment = '';
-            if (e.content === undefined) e.content = '';
-            if (!Array.isArray(e.key)) e.key = [];
-            if (typeof e.disable !== 'boolean') e.disable = false;
-            if (typeof e.constant !== 'boolean') e.constant = false;
-            if (typeof e.order !== 'number') e.order = 0;
-            if (typeof e.depth !== 'number') e.depth = 4;
-            if (typeof e.position !== 'number') e.position = 1;
-            return e;
+        const safeEntries = data.entries ? cloneData(data.entries) : {};
+        const arr = [];
+
+        Object.entries(safeEntries).forEach(([uidKey, entry], idx) => {
+            arr.push(normalizeEntry(entry, uidKey, idx));
         });
 
-        return entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (a.uid ?? 0) - (b.uid ?? 0));
+        return arr.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     },
 
     async saveBookEntries(name, entriesArray) {
         if (!name || !Array.isArray(entriesArray)) return;
 
-        const oldData = (await getContext().loadWorldInfo(name)) || { entries: {} };
+        const oldData = await getContext().loadWorldInfo(name) || { entries: {} };
         const newEntriesObj = {};
 
         entriesArray.forEach((entry) => {
             const uid = entry.uid;
-            const oldEntry = oldData.entries?.[uid] ? oldData.entries[uid] : {};
-            const safeEntry = safeClone(entry);
-            newEntriesObj[uid] = { ...oldEntry, ...safeEntry };
+            const oldEntry = (oldData.entries && oldData.entries[uid]) ? oldData.entries[uid] : {};
+            newEntriesObj[uid] = {
+                ...oldEntry,
+                ...cloneData(entry),
+            };
         });
 
         const newData = { ...oldData, entries: newEntriesObj };
@@ -302,7 +325,9 @@ const API = {
             }
 
             const chatBinding = await this.getChatBinding();
-            if (chatBinding === oldName) await setCharBindings('chat', newName, true);
+            if (chatBinding === oldName) {
+                await setCharBindings('chat', newName, true);
+            }
         } catch (e) {
             console.error('绑定迁移失败:', e);
             toastr.warning('重命名成功，但绑定迁移遇到错误');
@@ -313,25 +338,6 @@ const API = {
 };
 
 const Actions = {
-    getEntrySortScore(entry) {
-        const context = getContext();
-        const anDepth = context.chatMetadata?.note_depth
-            ?? context.extensionSettings?.note?.defaultDepth
-            ?? 4;
-
-        const pos = typeof entry.position === 'number' ? entry.position : 1;
-
-        if (pos === 0) return 100000;
-        if (pos === 1) return 90000;
-        if (pos === 5) return 80000;
-        if (pos === 6) return 70000;
-        if (pos === 4) return entry.depth ?? 4;
-        if (pos === 2) return anDepth + 0.6;
-        if (pos === 3) return anDepth + 0.4;
-
-        return -9999;
-    },
-
     async flushPendingSave() {
         if (!STATE.debouncer) return;
 
@@ -343,17 +349,37 @@ const Actions = {
         }
     },
 
+    getEntrySortScore(entry) {
+        const context = getContext();
+        const anDepth = (context.chatMetadata && context.chatMetadata.note_depth)
+            ?? (context.extensionSettings?.note?.defaultDepth)
+            ?? 4;
+
+        const pos = typeof entry.position === 'number' ? entry.position : 1;
+
+        if (pos === 0) return 100000;
+        if (pos === 1) return 90000;
+        if (pos === 5) return 80000;
+        if (pos === 6) return 70000;
+
+        if (pos === 4) return entry.depth ?? 4;
+        if (pos === 2) return anDepth + 0.6;
+        if (pos === 3) return anDepth + 0.4;
+
+        return -9999;
+    },
+
     async init() {
         if (STATE.isInitialized) return;
 
-        this.registerCoreEvents();
-        await this.refreshAllContext();
+        UI.initTooltips();
+        this.registerEvents();
 
+        await this.refreshAllContext();
         STATE.isInitialized = true;
-        console.log('[Worldbook Editor] Initialization complete.');
     },
 
-    registerCoreEvents() {
+    registerEvents() {
         const es = eventSource;
         const et = event_types;
 
@@ -363,7 +389,6 @@ const Actions = {
 
         es.on(et.WORLDINFO_UPDATED, (name) => {
             if (STATE.currentBookName === name) this.loadBook(name);
-            if (STATE.currentView === 'stitch') this.refreshStitchBooks();
         });
 
         es.on(et.CHAT_CHANGED, () => {
@@ -371,9 +396,7 @@ const Actions = {
         });
 
         es.on(et.CHARACTER_SELECTED, () => {
-            setTimeout(() => {
-                this.refreshAllContext();
-            }, 100);
+            setTimeout(() => this.refreshAllContext(), 100);
         });
 
         es.on(et.CHARACTER_EDITED, () => {
@@ -399,31 +422,17 @@ const Actions = {
             STATE.metadata = API.getMetadata();
 
             UI.renderBookSelector();
-
-            if (STATE.currentView === 'binding') UI.renderBindingView();
+            UI.renderBindingView();
             if (STATE.currentView === 'manage') UI.renderManageView();
-            if (STATE.currentView === 'stitch') this.refreshStitchBooks();
+            if (STATE.currentView === 'stitch') UI.renderStitchView();
         } catch (e) {
-            console.error('refreshAllContext failed:', e);
+            console.error('Failed to refresh context:', e);
         }
     },
 
     switchView(viewName) {
         STATE.currentView = viewName;
         UI.switchView(viewName);
-
-        if (viewName === 'binding') {
-            UI.renderBindingView();
-        } else if (viewName === 'manage') {
-            UI.renderManageView();
-        } else if (viewName === 'stitch') {
-            this.ensureStitchReady();
-        } else {
-            UI.renderBookSelector();
-            UI.renderGlobalStats();
-            UI.renderList(document.getElementById('wb-search-entry')?.value || '');
-            UI.updateSelectionBar();
-        }
     },
 
     async loadBook(name) {
@@ -442,15 +451,12 @@ const Actions = {
                 const scoreA = this.getEntrySortScore(a);
                 const scoreB = this.getEntrySortScore(b);
                 if (scoreA !== scoreB) return scoreB - scoreA;
-                return (a.order ?? 0) - (b.order ?? 0) || (a.uid ?? 0) - (b.uid ?? 0);
+                return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
             });
 
+            UI.renderBookSelector();
             UI.renderGlobalStats();
             UI.renderList();
-            UI.updateSelectionBar();
-
-            const selector = document.getElementById('wb-book-selector');
-            if (selector) selector.value = name;
         } catch (e) {
             if (STATE.currentBookName === name) {
                 console.error('Load book failed', e);
@@ -477,7 +483,7 @@ const Actions = {
             if (targetBookName && targetEntries) {
                 API.saveBookEntries(targetBookName, targetEntries);
             }
-        }, 280);
+        }, 300);
     },
 
     async addNewEntry() {
@@ -507,9 +513,7 @@ const Actions = {
     async deleteEntry(uid) {
         if (!confirm('确定要删除此条目吗？')) return;
         await API.deleteEntries(STATE.currentBookName, [uid]);
-        STATE.selectedUids.delete(uid);
         await this.loadBook(STATE.currentBookName);
-        UI.updateSelectionBar();
     },
 
     sortByPriority() {
@@ -522,52 +526,12 @@ const Actions = {
             const orderB = b.order ?? 0;
             if (orderA !== orderB) return orderA - orderB;
 
-            return (a.uid ?? 0) - (b.uid ?? 0);
+            return a.uid - b.uid;
         });
 
         UI.renderList();
         API.saveBookEntries(STATE.currentBookName, STATE.entries);
-        toastr.success('已重新按上下文逻辑重排');
-    },
-
-    toggleSelect(uid, checked) {
-        if (checked) STATE.selectedUids.add(uid);
-        else STATE.selectedUids.delete(uid);
-        UI.updateSelectionBar();
-    },
-
-    clearSelection() {
-        STATE.selectedUids.clear();
-        UI.renderList(document.getElementById('wb-search-entry')?.value || '');
-        UI.updateSelectionBar();
-    },
-
-    selectAllVisible() {
-        const cards = document.querySelectorAll('#wb-entry-list .wb-card[data-uid]');
-        cards.forEach((card) => STATE.selectedUids.add(Number(card.dataset.uid)));
-        UI.renderList(document.getElementById('wb-search-entry')?.value || '');
-        UI.updateSelectionBar();
-    },
-
-    invertVisibleSelection() {
-        const cards = document.querySelectorAll('#wb-entry-list .wb-card[data-uid]');
-        cards.forEach((card) => {
-            const uid = Number(card.dataset.uid);
-            if (STATE.selectedUids.has(uid)) STATE.selectedUids.delete(uid);
-            else STATE.selectedUids.add(uid);
-        });
-        UI.renderList(document.getElementById('wb-search-entry')?.value || '');
-        UI.updateSelectionBar();
-    },
-
-    batchUpdate(updater) {
-        if (!STATE.selectedUids.size) return;
-        STATE.entries.forEach((entry) => {
-            if (STATE.selectedUids.has(entry.uid)) updater(entry);
-        });
-        UI.renderList(document.getElementById('wb-search-entry')?.value || '');
-        UI.renderGlobalStats();
-        API.saveBookEntries(STATE.currentBookName, STATE.entries);
+        toastr.success('已按优先级重排');
     },
 
     async saveBindings() {
@@ -620,34 +584,38 @@ const Actions = {
         try {
             const ctx = getContext();
             if (ctx.getTokenCount) return ctx.getTokenCount(text);
-        } catch (_e) {}
-        return Math.ceil(String(text).length / 3);
+        } catch (_e) {
+            // noop
+        }
+        return Math.ceil(text.length / 3);
     },
 
     async actionImport() {
-        document.getElementById('wb-import-file')?.click();
+        const input = document.getElementById('wb-import-file');
+        if (input) input.click();
     },
 
     async actionHandleImport(file) {
         if (!file) return;
         const reader = new FileReader();
+
         reader.onload = async (e) => {
             try {
                 const content = JSON.parse(e.target.result);
                 let entries = content.entries ? Object.values(content.entries) : content;
                 if (!Array.isArray(entries)) entries = [];
 
-                const defaultName = file.name.replace(/\.(json|wb)$/i, '');
-                const name = prompt('请输入导入后的世界书名称:', defaultName);
+                const bookName = file.name.replace(/\.(json|wb)$/i, '');
+                const name = prompt('请输入导入后的世界书名称:', bookName);
                 if (!name) return;
 
-                if (STATE.allBookNames.includes(name)) {
-                    if (!confirm(`世界书 "${name}" 已存在，是否覆盖？`)) return;
-                } else {
-                    await API.createWorldbook(name);
+                if (STATE.allBookNames.includes(name) && !confirm(`世界书 "${name}" 已存在，是否覆盖？`)) {
+                    return;
                 }
 
+                if (!STATE.allBookNames.includes(name)) await API.createWorldbook(name);
                 await API.saveBookEntries(name, entries);
+
                 toastr.success(`导入成功: ${name}`);
                 await this.refreshAllContext();
                 await this.loadBook(name);
@@ -656,6 +624,7 @@ const Actions = {
                 toastr.error(`导入失败: ${err.message}`);
             }
         };
+
         reader.readAsText(file);
     },
 
@@ -665,9 +634,11 @@ const Actions = {
         try {
             const entries = await API.loadBook(STATE.currentBookName);
             const entriesObj = {};
-            entries.forEach((entry) => { entriesObj[entry.uid] = entry; });
-            const exportData = { entries: entriesObj };
+            entries.forEach((entry) => {
+                entriesObj[entry.uid] = entry;
+            });
 
+            const exportData = { entries: entriesObj };
             const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -707,10 +678,9 @@ const Actions = {
             await API.deleteWorldbook(STATE.currentBookName);
             STATE.currentBookName = null;
             STATE.entries = [];
-            STATE.selectedUids.clear();
             await this.refreshAllContext();
             UI.renderList();
-            UI.updateSelectionBar();
+            UI.renderGlobalStats();
         } catch (e) {
             toastr.error(`删除失败: ${e.message}`);
         }
@@ -732,146 +702,122 @@ const Actions = {
         }
     },
 
-    async jumpToEditor(bookName) {
-        await this.loadBook(bookName);
-        this.switchView('editor');
+    // -------- Stitch --------
+    stitchSide(side) {
+        return side === 'left' ? STATE.stitch.left : STATE.stitch.right;
     },
 
-    // -------------------- Stitch --------------------
-    async ensureStitchReady() {
-        if (!STATE.allBookNames.length) {
-            UI.renderStitchView();
+    otherSide(side) {
+        return side === 'left' ? 'right' : 'left';
+    },
+
+    async ensureStitchBooks() {
+        const all = STATE.allBookNames;
+        if (!all.length) return;
+
+        if (!STATE.stitch.left.book || !all.includes(STATE.stitch.left.book)) {
+            STATE.stitch.left.book = (STATE.currentBookName && all.includes(STATE.currentBookName))
+                ? STATE.currentBookName
+                : all[0];
+        }
+
+        if (!STATE.stitch.right.book || !all.includes(STATE.stitch.right.book)) {
+            const candidate = all.find((n) => n !== STATE.stitch.left.book);
+            STATE.stitch.right.book = candidate || STATE.stitch.left.book;
+        }
+
+        await Promise.all([
+            this.stitchLoadSide('left', STATE.stitch.left.book, true),
+            this.stitchLoadSide('right', STATE.stitch.right.book, true),
+        ]);
+    },
+
+    async stitchLoadSide(side, bookName, force = false) {
+        const target = this.stitchSide(side);
+        if (!bookName) return;
+
+        if (!force && target.book === bookName && target.entries.length) return;
+
+        target.book = bookName;
+        target.entries = await API.loadBook(bookName);
+        target.selected = new Set();
+    },
+
+    getNextUid(entries) {
+        return entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
+    },
+
+    normalizeOrders(entries) {
+        entries.forEach((e, idx) => {
+            e.order = idx;
+        });
+    },
+
+    async stitchTransfer(fromSide, toSide, uidList, mode) {
+        const source = this.stitchSide(fromSide);
+        const target = this.stitchSide(toSide);
+
+        if (!source.book || !target.book) return;
+        if (source.book === target.book) {
+            toastr.warning('左右是同一本世界书，无法跨书缝合');
             return;
         }
 
-        const leftBook = STATE.stitch.left.book && STATE.allBookNames.includes(STATE.stitch.left.book)
-            ? STATE.stitch.left.book
-            : (STATE.currentBookName && STATE.allBookNames.includes(STATE.currentBookName)
-                ? STATE.currentBookName
-                : STATE.allBookNames[0]);
+        const sourceMap = new Map(source.entries.map((e) => [Number(e.uid), e]));
+        const movedUids = [];
 
-        const rightDefault = STATE.allBookNames.find((n) => n !== leftBook) || leftBook;
-        const rightBook = STATE.stitch.right.book && STATE.allBookNames.includes(STATE.stitch.right.book)
-            ? STATE.stitch.right.book
-            : rightDefault;
+        uidList.forEach((uid) => {
+            const item = sourceMap.get(Number(uid));
+            if (!item) return;
 
-        STATE.stitch.left.book = leftBook;
-        STATE.stitch.right.book = rightBook;
+            const cloned = cloneData(item);
+            cloned.uid = this.getNextUid(target.entries);
+            target.entries.push(cloned);
 
-        await Promise.all([
-            this.loadStitchBook('left', leftBook),
-            this.loadStitchBook('right', rightBook),
-        ]);
+            if (mode === 'move') movedUids.push(Number(uid));
+        });
 
-        UI.renderStitchView();
-    },
+        if (mode === 'move' && movedUids.length) {
+            source.entries = source.entries.filter((e) => !movedUids.includes(Number(e.uid)));
+            movedUids.forEach((uid) => source.selected.delete(uid));
+        }
 
-    async refreshStitchBooks() {
-        if (STATE.currentView !== 'stitch') return;
-        if (!STATE.stitch.left.book || !STATE.stitch.right.book) return;
-        await Promise.all([
-            this.loadStitchBook('left', STATE.stitch.left.book),
-            this.loadStitchBook('right', STATE.stitch.right.book),
-        ]);
-        UI.renderStitchView();
-    },
+        this.normalizeOrders(source.entries);
+        this.normalizeOrders(target.entries);
 
-    async loadStitchBook(side, name) {
-        if (!name) return;
-        STATE.stitch[side].book = name;
-        STATE.stitch[side].selected.clear();
+        await API.saveBookEntries(source.book, source.entries);
+        await API.saveBookEntries(target.book, target.entries);
 
-        try {
-            const entries = await API.loadBook(name);
-            STATE.stitch[side].entries = entries;
-        } catch (e) {
-            console.error(e);
-            toastr.error(`缝合面板加载失败: ${name}`);
-            STATE.stitch[side].entries = [];
+        if (STATE.currentBookName === source.book) {
+            STATE.entries = cloneData(source.entries);
+        } else if (STATE.currentBookName === target.book) {
+            STATE.entries = cloneData(target.entries);
+        }
+
+        if (STATE.currentView === 'editor') {
+            UI.renderList();
+            UI.renderGlobalStats();
         }
     },
 
-    toggleStitchSelect(side, uid, checked) {
-        if (checked) STATE.stitch[side].selected.add(uid);
-        else STATE.stitch[side].selected.delete(uid);
-        UI.renderStitchSide(side);
-    },
+    async stitchTransferSelected(fromSide, mode) {
+        const source = this.stitchSide(fromSide);
+        const targetSide = this.otherSide(fromSide);
+        const selected = Array.from(source.selected);
 
-    selectAllStitch(side) {
-        const visible = UI.getStitchVisible(side);
-        visible.forEach((entry) => STATE.stitch[side].selected.add(entry.uid));
-        UI.renderStitchSide(side);
-    },
-
-    invertStitch(side) {
-        const visible = UI.getStitchVisible(side);
-        visible.forEach((entry) => {
-            if (STATE.stitch[side].selected.has(entry.uid)) STATE.stitch[side].selected.delete(entry.uid);
-            else STATE.stitch[side].selected.add(entry.uid);
-        });
-        UI.renderStitchSide(side);
-    },
-
-    clearStitch(side) {
-        STATE.stitch[side].selected.clear();
-        UI.renderStitchSide(side);
-    },
-
-    async deleteStitchSelected(side) {
-        const panel = STATE.stitch[side];
-        if (!panel.selected.size) return toastr.warning('请先选择条目');
-        if (!confirm(`确定删除 ${panel.selected.size} 个条目吗？`)) return;
-
-        const ids = new Set(panel.selected);
-        panel.entries = panel.entries.filter((e) => !ids.has(e.uid));
-        panel.selected.clear();
-
-        await API.saveBookEntries(panel.book, panel.entries);
-        UI.renderStitchSide(side);
-        toastr.success('删除完成');
-    },
-
-    async transferStitch(fromSide, toSide, move = false) {
-        const from = STATE.stitch[fromSide];
-        const to = STATE.stitch[toSide];
-
-        if (!from.selected.size) return toastr.warning('请先选择条目');
-        if (!from.book || !to.book) return;
-        if (from.book === to.book && move) return toastr.warning('同一本书不能移动');
-
-        const selectedEntries = from.entries.filter((e) => from.selected.has(e.uid));
-        if (!selectedEntries.length) return;
-
-        let maxUid = to.entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1);
-
-        selectedEntries.forEach((entry) => {
-            const copied = safeClone(entry);
-            maxUid += 1;
-            copied.uid = maxUid;
-            copied.order = (to.entries[to.entries.length - 1]?.order ?? -1) + 1;
-            to.entries.push(copied);
-        });
-
-        if (move) {
-            const selectedSet = new Set(from.selected);
-            from.entries = from.entries.filter((e) => !selectedSet.has(e.uid));
+        if (!selected.length) {
+            toastr.warning('请先勾选条目');
+            return;
         }
 
-        from.selected.clear();
-
-        await Promise.all([
-            API.saveBookEntries(from.book, from.entries),
-            API.saveBookEntries(to.book, to.entries),
-        ]);
-
-        UI.renderStitchSide(fromSide);
-        UI.renderStitchSide(toSide);
-        toastr.success(move ? '移动完成' : '复制完成');
+        await this.stitchTransfer(fromSide, targetSide, selected, mode);
+        UI.renderStitchView();
+        toastr.success(mode === 'move' ? '已移动' : '已复制');
     },
 };
 
 const UI = {
-    open() {
+    async open() {
         if (document.getElementById(CONFIG.id)) return;
 
         const panel = document.createElement('div');
@@ -879,23 +825,18 @@ const UI = {
         panel.innerHTML = `
             <div class="wb-header-bar">
                 <div class="wb-tabs">
-                    <div class="wb-tab active" data-tab="editor">编辑世界书</div>
-                    <div class="wb-tab" data-tab="stitch">缝合世界书</div>
-                    <div class="wb-tab" data-tab="binding">绑定世界书</div>
-                    <div class="wb-tab" data-tab="manage">管理世界书</div>
+                    <div class="wb-tab active" data-tab="editor"><i class="fa-solid fa-pen-to-square"></i> 编辑世界书</div>
+                    <div class="wb-tab" data-tab="stitch"><i class="fa-solid fa-table-columns"></i> 缝合世界书</div>
+                    <div class="wb-tab" data-tab="binding"><i class="fa-solid fa-link"></i> 绑定世界书</div>
+                    <div class="wb-tab" data-tab="manage"><i class="fa-solid fa-list-check"></i> 管理世界书</div>
                 </div>
                 <div id="wb-close" class="wb-header-close" title="关闭"><i class="fa-solid fa-xmark"></i></div>
             </div>
 
             <div class="wb-content">
-                <!-- 编辑 -->
                 <div id="wb-view-editor" class="wb-view-section">
                     <div class="wb-book-bar">
-                        <div style="position:relative;flex:1">
-                            <select id="wb-book-selector" style="width:100%">
-                                <option>加载中...</option>
-                            </select>
-                        </div>
+                        <select id="wb-book-selector" style="flex:1"><option>加载中...</option></select>
                         <button class="wb-btn-circle" id="wb-btn-import" title="导入"><i class="fa-solid fa-file-import"></i></button>
                         <button class="wb-btn-circle" id="wb-btn-export" title="导出"><i class="fa-solid fa-file-export"></i></button>
                         <button class="wb-btn-circle" id="wb-btn-create" title="新建"><i class="fa-solid fa-plus"></i></button>
@@ -905,114 +846,94 @@ const UI = {
                     </div>
 
                     <div class="wb-stat-line">
-                        <div class="wb-stat-group">
-                            <div class="wb-stat-item" id="wb-display-count">0 条目</div>
-                        </div>
+                        <div class="wb-stat-item" id="wb-display-count">0 条目</div>
                     </div>
 
                     <div class="wb-tool-bar">
-                        <input class="wb-input-dark" id="wb-search-entry" style="flex:1" placeholder="搜索条目...">
+                        <input class="wb-input-dark" id="wb-search-entry" placeholder="搜索条目...">
                         <button class="wb-btn-circle" id="btn-sort-priority" title="按优先级重排"><i class="fa-solid fa-filter"></i></button>
                         <button class="wb-btn-circle" id="btn-add-entry" title="新建条目"><i class="fa-solid fa-plus"></i></button>
-                    </div>
-
-                    <div id="wb-batch-bar" class="wb-batch-bar wb-hidden">
-                        <span id="wb-batch-count">已选 0/0</span>
-                        <button class="wb-btn-rect mini" id="wb-select-all">全选</button>
-                        <button class="wb-btn-rect mini" id="wb-select-invert">反选</button>
-                        <button class="wb-btn-rect mini" id="wb-select-clear">清空</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-enable">批量开启</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-disable">批量关闭</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-const-on">常驻</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-const-off">非常驻</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-order-up">顺序+1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-order-down">顺序-1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-depth-up">深度+1</button>
-                        <button class="wb-btn-rect mini" id="wb-batch-depth-down">深度-1</button>
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
                 </div>
 
-                <!-- 缝合（双面板） -->
                 <div id="wb-view-stitch" class="wb-view-section wb-hidden">
-                    <div class="wb-stitch-shell">
-                        <div class="wb-stitch-panels">
-                            <div class="wb-stitch-panel" id="wb-stitch-left">
-                                <div class="wb-stitch-top">
-                                    <label>左侧世界书</label>
-                                    <div style="position:relative;">
-                                        <select id="wb-stitch-left-book"></select>
-                                    </div>
-                                </div>
+                    <div class="wb-stitch-topbar">
+                        <div class="wb-stitch-mode-wrap">
+                            <span>拖拽模式</span>
+                            <select id="wb-stitch-mode">
+                                <option value="copy">复制</option>
+                                <option value="move">移动</option>
+                            </select>
+                        </div>
+                        <div class="wb-stitch-hint">把条目拖到另一侧列表即可跨书缝合；移动端可用下方“复制/移动选中”按钮。</div>
+                    </div>
+
+                    <div class="wb-stitch-grid">
+                        <div class="wb-stitch-pane" id="wb-stitch-left-pane">
+                            <div class="wb-stitch-pane-head">
+                                <div class="wb-stitch-pane-title">左侧世界书</div>
+                                <select id="wb-stitch-left-book"></select>
+                            </div>
+                            <div class="wb-stitch-pane-tools">
                                 <input class="wb-input-dark" id="wb-stitch-left-search" placeholder="搜索左侧条目...">
-                                <div class="wb-stitch-mini-actions">
-                                    <button class="wb-btn-rect mini" id="wb-stitch-left-all">全选</button>
-                                    <button class="wb-btn-rect mini" id="wb-stitch-left-invert">反选</button>
-                                    <button class="wb-btn-rect mini" id="wb-stitch-left-clear">清空</button>
-                                    <button class="wb-btn-rect mini danger" id="wb-stitch-left-del">删除选中</button>
-                                </div>
-                                <div class="wb-stitch-list" id="wb-stitch-left-list"></div>
-                                <div class="wb-stitch-foot" id="wb-stitch-left-foot"></div>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-all">全选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-invert">反选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-clear">清空</button>
                             </div>
-
-                            <div class="wb-stitch-mid">
-                                <button class="wb-btn-rect" id="wb-copy-l2r">复制 →</button>
-                                <button class="wb-btn-rect" id="wb-move-l2r">移动 →</button>
-                                <button class="wb-btn-rect" id="wb-copy-r2l">← 复制</button>
-                                <button class="wb-btn-rect" id="wb-move-r2l">← 移动</button>
+                            <div class="wb-stitch-list" id="wb-stitch-left-list" data-side="left"></div>
+                            <div class="wb-stitch-pane-actions">
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-copy">复制选中到右侧</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-move">移动选中到右侧</button>
                             </div>
+                        </div>
 
-                            <div class="wb-stitch-panel" id="wb-stitch-right">
-                                <div class="wb-stitch-top">
-                                    <label>右侧世界书</label>
-                                    <div style="position:relative;">
-                                        <select id="wb-stitch-right-book"></select>
-                                    </div>
-                                </div>
+                        <div class="wb-stitch-pane" id="wb-stitch-right-pane">
+                            <div class="wb-stitch-pane-head">
+                                <div class="wb-stitch-pane-title">右侧世界书</div>
+                                <select id="wb-stitch-right-book"></select>
+                            </div>
+                            <div class="wb-stitch-pane-tools">
                                 <input class="wb-input-dark" id="wb-stitch-right-search" placeholder="搜索右侧条目...">
-                                <div class="wb-stitch-mini-actions">
-                                    <button class="wb-btn-rect mini" id="wb-stitch-right-all">全选</button>
-                                    <button class="wb-btn-rect mini" id="wb-stitch-right-invert">反选</button>
-                                    <button class="wb-btn-rect mini" id="wb-stitch-right-clear">清空</button>
-                                    <button class="wb-btn-rect mini danger" id="wb-stitch-right-del">删除选中</button>
-                                </div>
-                                <div class="wb-stitch-list" id="wb-stitch-right-list"></div>
-                                <div class="wb-stitch-foot" id="wb-stitch-right-foot"></div>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-all">全选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-invert">反选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-clear">清空</button>
+                            </div>
+                            <div class="wb-stitch-list" id="wb-stitch-right-list" data-side="right"></div>
+                            <div class="wb-stitch-pane-actions">
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-copy">复制选中到左侧</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-move">移动选中到左侧</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 绑定 -->
                 <div id="wb-view-binding" class="wb-view-section wb-hidden">
                     <div class="wb-bind-grid">
                         <div class="wb-bind-card">
-                            <div class="wb-bind-title">角色世界书</div>
+                            <div class="wb-bind-title"><span><i class="fa-solid fa-user-tag"></i> 角色世界书</span></div>
                             <div class="wb-bind-label">主要世界书</div>
                             <div style="position:relative"><select id="wb-bind-char-primary" style="width:100%"></select></div>
                             <div class="wb-bind-label">附加世界书</div>
                             <div class="wb-scroll-list" id="wb-bind-char-list"></div>
                         </div>
                         <div class="wb-bind-card">
-                            <div class="wb-bind-title">全局世界书</div>
+                            <div class="wb-bind-title"><span><i class="fa-solid fa-globe"></i> 全局世界书</span></div>
                             <div class="wb-scroll-list" id="wb-bind-global-list"></div>
                         </div>
                         <div class="wb-bind-card">
-                            <div class="wb-bind-title">聊天世界书</div>
+                            <div class="wb-bind-title"><span><i class="fa-solid fa-comments"></i> 聊天世界书</span></div>
                             <div style="position:relative"><select id="wb-bind-chat" style="width:100%"></select></div>
                         </div>
                     </div>
                 </div>
 
-                <!-- 管理 -->
                 <div id="wb-view-manage" class="wb-view-section wb-hidden">
-                    <div class="wb-manage-container">
-                        <div class="wb-tool-bar">
-                            <input class="wb-input-dark" id="wb-manage-search" style="width:100%" placeholder="搜索世界书...">
-                        </div>
-                        <div class="wb-manage-content" id="wb-manage-content"></div>
+                    <div class="wb-tool-bar">
+                        <input class="wb-input-dark" id="wb-manage-search" placeholder="搜索世界书...">
                     </div>
+                    <div class="wb-manage-content" id="wb-manage-content"></div>
                 </div>
             </div>
         `;
@@ -1021,7 +942,10 @@ const UI = {
         const $ = (sel) => panel.querySelector(sel);
         const $$ = (sel) => panel.querySelectorAll(sel);
 
-        $('#wb-close').onclick = () => panel.remove();
+        $('#wb-close').onclick = async () => {
+            await Actions.flushPendingSave();
+            panel.remove();
+        };
 
         $$('.wb-tab').forEach((el) => {
             el.onclick = () => Actions.switchView(el.dataset.tab);
@@ -1046,75 +970,22 @@ const UI = {
             }
         };
 
-        $('#wb-select-all').onclick = () => Actions.selectAllVisible();
-        $('#wb-select-invert').onclick = () => Actions.invertVisibleSelection();
-        $('#wb-select-clear').onclick = () => Actions.clearSelection();
-
-        $('#wb-batch-enable').onclick = () => Actions.batchUpdate((d) => { d.disable = false; });
-        $('#wb-batch-disable').onclick = () => Actions.batchUpdate((d) => { d.disable = true; });
-        $('#wb-batch-const-on').onclick = () => Actions.batchUpdate((d) => { d.constant = true; d.selective = false; });
-        $('#wb-batch-const-off').onclick = () => Actions.batchUpdate((d) => { d.constant = false; d.selective = true; });
-        $('#wb-batch-order-up').onclick = () => Actions.batchUpdate((d) => { d.order = (d.order ?? 0) + 1; });
-        $('#wb-batch-order-down').onclick = () => Actions.batchUpdate((d) => { d.order = (d.order ?? 0) - 1; });
-        $('#wb-batch-depth-up').onclick = () => Actions.batchUpdate((d) => { d.depth = (d.depth ?? 4) + 1; });
-        $('#wb-batch-depth-down').onclick = () => Actions.batchUpdate((d) => { d.depth = Math.max(0, (d.depth ?? 4) - 1); });
-
         $('#wb-manage-search').oninput = (e) => UI.renderManageView(e.target.value);
 
-        // stitch events
-        $('#wb-stitch-left-book').addEventListener('change', async (e) => {
-            await Actions.loadStitchBook('left', e.target.value);
-            UI.renderStitchView();
-        });
-        $('#wb-stitch-right-book').addEventListener('change', async (e) => {
-            await Actions.loadStitchBook('right', e.target.value);
-            UI.renderStitchView();
-        });
+        await Actions.refreshAllContext();
 
-        $('#wb-stitch-left-search').oninput = (e) => {
-            STATE.stitch.left.search = e.target.value || '';
-            UI.renderStitchSide('left');
-        };
-        $('#wb-stitch-right-search').oninput = (e) => {
-            STATE.stitch.right.search = e.target.value || '';
-            UI.renderStitchSide('right');
-        };
+        const targetBook = STATE.bindings.char.primary
+            || STATE.bindings.chat
+            || (STATE.allBookNames.length ? STATE.allBookNames[0] : null);
 
-        $('#wb-stitch-left-all').onclick = () => Actions.selectAllStitch('left');
-        $('#wb-stitch-left-invert').onclick = () => Actions.invertStitch('left');
-        $('#wb-stitch-left-clear').onclick = () => Actions.clearStitch('left');
-        $('#wb-stitch-left-del').onclick = () => Actions.deleteStitchSelected('left');
-
-        $('#wb-stitch-right-all').onclick = () => Actions.selectAllStitch('right');
-        $('#wb-stitch-right-invert').onclick = () => Actions.invertStitch('right');
-        $('#wb-stitch-right-clear').onclick = () => Actions.clearStitch('right');
-        $('#wb-stitch-right-del').onclick = () => Actions.deleteStitchSelected('right');
-
-        $('#wb-copy-l2r').onclick = () => Actions.transferStitch('left', 'right', false);
-        $('#wb-move-l2r').onclick = () => Actions.transferStitch('left', 'right', true);
-        $('#wb-copy-r2l').onclick = () => Actions.transferStitch('right', 'left', false);
-        $('#wb-move-r2l').onclick = () => Actions.transferStitch('right', 'left', true);
-
-        Actions.refreshAllContext().then(async () => {
-            let targetBook = null;
-            const charPrimary = STATE.bindings.char.primary;
-            const chatBook = STATE.bindings.chat;
-
-            if (charPrimary && STATE.allBookNames.includes(charPrimary)) targetBook = charPrimary;
-            else if (chatBook && STATE.allBookNames.includes(chatBook)) targetBook = chatBook;
-            else if (STATE.allBookNames.length > 0) targetBook = STATE.allBookNames[0];
-
-            UI.renderBookSelector();
+        if (targetBook) {
+            await Actions.loadBook(targetBook);
+        } else {
+            UI.renderList();
             UI.renderGlobalStats();
+        }
 
-            if (targetBook) await Actions.loadBook(targetBook);
-            else UI.renderList();
-
-            Actions.switchView('editor');
-        }).catch((e) => {
-            console.error(e);
-            toastr.error('初始化面板失败');
-        });
+        UI.switchView('editor');
     },
 
     switchView(viewName) {
@@ -1123,8 +994,20 @@ const UI = {
         });
 
         document.querySelectorAll('.wb-view-section').forEach((el) => el.classList.add('wb-hidden'));
-        const targetView = document.getElementById(`wb-view-${viewName}`);
-        if (targetView) targetView.classList.remove('wb-hidden');
+        const target = document.getElementById(`wb-view-${viewName}`);
+        if (target) target.classList.remove('wb-hidden');
+
+        if (viewName === 'binding') {
+            this.renderBindingView();
+        } else if (viewName === 'manage') {
+            this.renderManageView();
+        } else if (viewName === 'stitch') {
+            Actions.ensureStitchBooks().then(() => this.renderStitchView());
+        } else if (viewName === 'editor') {
+            this.renderBookSelector();
+            this.renderGlobalStats();
+            this.renderList(document.getElementById('wb-search-entry')?.value || '');
+        }
     },
 
     renderBookSelector() {
@@ -1134,6 +1017,7 @@ const UI = {
         const { char, global, chat } = STATE.bindings;
         const allNames = STATE.allBookNames;
         const globalBooks = new Set(global);
+        const chatBook = chat;
 
         let html = '';
 
@@ -1152,12 +1036,12 @@ const UI = {
 
         if (globalBooks.size > 0) {
             html += '<optgroup label="全局启用">';
-            [...globalBooks].forEach((name) => { html += `<option value="${esc(name)}">${esc(name)}</option>`; });
+            globalBooks.forEach((name) => { html += `<option value="${esc(name)}">${esc(name)}</option>`; });
             html += '</optgroup>';
         }
 
-        if (chat) {
-            html += `<optgroup label="当前聊天"><option value="${esc(chat)}">${esc(chat)}</option></optgroup>`;
+        if (chatBook) {
+            html += `<optgroup label="当前聊天"><option value="${esc(chatBook)}">${esc(chatBook)}</option></optgroup>`;
         }
 
         html += '<optgroup label="其他">';
@@ -1166,227 +1050,7 @@ const UI = {
 
         selector.innerHTML = html;
         if (STATE.currentBookName) selector.value = STATE.currentBookName;
-
         this.applyCustomDropdown('wb-book-selector');
-    },
-
-    renderGlobalStats() {
-        const countEl = document.getElementById('wb-display-count');
-        if (!countEl) return;
-
-        let blueTokens = 0;
-        let greenTokens = 0;
-
-        STATE.entries.forEach((entry) => {
-            if (entry.disable === false) {
-                const t = Actions.getTokenCount(entry.content);
-                if (entry.constant === true) blueTokens += t;
-                else greenTokens += t;
-            }
-        });
-
-        countEl.innerHTML = `${STATE.entries.length} 条目 | ${blueTokens + greenTokens} Tokens (<span class="wb-text-blue">${blueTokens}</span> + <span class="wb-text-green">${greenTokens}</span>)`;
-    },
-
-    updateSelectionBar() {
-        const bar = document.getElementById('wb-batch-bar');
-        const cnt = document.getElementById('wb-batch-count');
-        if (!bar || !cnt) return;
-
-        cnt.textContent = `已选 ${STATE.selectedUids.size}/${STATE.entries.length}`;
-        bar.classList.toggle('wb-hidden', STATE.selectedUids.size === 0);
-    },
-
-    renderList(filterText = '') {
-        const list = document.getElementById('wb-entry-list');
-        if (!list) return;
-        list.innerHTML = '';
-
-        const term = String(filterText || '').toLowerCase();
-
-        STATE.entries.forEach((entry, index) => {
-            const name = entry.comment || '';
-            if (term && !name.toLowerCase().includes(term)) return;
-
-            const card = this.createCard(entry, index);
-            list.appendChild(card);
-            this.applyCustomDropdown(`wb-pos-${entry.uid}`);
-        });
-
-        if (!list.children.length) {
-            list.innerHTML = '<div class="wb-empty">没有可显示条目</div>';
-        }
-
-        this.updateSelectionBar();
-    },
-
-    updateCardStatus(uid) {
-        const entry = STATE.entries.find((e) => e.uid === uid);
-        const card = document.querySelector(`.wb-card[data-uid="${uid}"]`);
-        if (!entry || !card) return;
-
-        card.classList.remove('disabled', 'type-green', 'type-blue');
-
-        if (entry.disable) {
-            card.classList.add('disabled');
-        } else if (entry.constant) {
-            card.classList.add('type-blue');
-        } else {
-            card.classList.add('type-green');
-        }
-
-        const tokenEl = card.querySelector('.wb-token-display');
-        if (tokenEl) tokenEl.textContent = Actions.getTokenCount(entry.content);
-    },
-
-    createCard(entry, index) {
-        const isEnabled = !entry.disable;
-        const isConstant = !!entry.constant;
-        const isSelected = STATE.selectedUids.has(entry.uid);
-        const keys = entry.key || [];
-
-        const card = document.createElement('div');
-        card.className = `wb-card ${isEnabled ? '' : 'disabled'} ${isEnabled ? (isConstant ? 'type-blue' : 'type-green') : ''}`;
-        card.dataset.uid = entry.uid;
-        card.dataset.index = index;
-
-        const curPosInt = typeof entry.position === 'number' ? entry.position : 1;
-        const curPosStr = WI_POSITION_MAP[curPosInt] || 'after_character_definition';
-
-        const corePositions = ['before_character_definition', 'after_character_definition', 'at_depth'];
-        const allPosOptions = [
-            { v: 'before_character_definition', t: '角色定义之前' },
-            { v: 'after_character_definition', t: '角色定义之后' },
-            { v: 'before_example_messages', t: '示例消息之前' },
-            { v: 'after_example_messages', t: '示例消息之后' },
-            { v: 'before_author_note', t: '作者注释之前' },
-            { v: 'after_author_note', t: '作者注释之后' },
-            { v: 'at_depth', t: '@D' },
-        ];
-
-        const showCoreOnly = corePositions.includes(curPosStr);
-
-        let optionsHtml = '';
-        allPosOptions.forEach((opt) => {
-            if (showCoreOnly && !corePositions.includes(opt.v)) return;
-            const selected = opt.v === curPosStr ? 'selected' : '';
-            optionsHtml += `<option value="${opt.v}" ${selected}>${opt.t}</option>`;
-        });
-
-        const warningIcon = isEnabled && !isConstant && !(keys.length > 0)
-            ? '<i class="fa-solid fa-circle-exclamation wb-warning-icon" title="绿灯条目已启用但未设置关键词"></i>'
-            : '';
-
-        card.innerHTML = `
-            <div class="wb-card-header">
-                <div class="wb-card-main">
-                    <div class="wb-row">
-                        <input type="checkbox" class="wb-inp-select" ${isSelected ? 'checked' : ''} title="选择条目">
-                        <input class="wb-inp-title inp-name" value="${esc(entry.comment)}" placeholder="条目名称">
-                        <div class="wb-warning-container">${warningIcon}</div>
-                        <i class="fa-solid fa-eye btn-preview" title="编辑内容"></i>
-                        <i class="fa-solid fa-trash btn-delete" title="删除条目"></i>
-                    </div>
-                    <div class="wb-row">
-                        <div class="wb-ctrl-group">
-                            <label class="wb-switch">
-                                <input type="checkbox" class="inp-enable" ${isEnabled ? 'checked' : ''}>
-                                <span class="wb-slider purple"></span>
-                            </label>
-                        </div>
-                        <div class="wb-ctrl-group">
-                            <label class="wb-switch">
-                                <input type="checkbox" class="inp-type" ${isConstant ? 'checked' : ''}>
-                                <span class="wb-slider blue"></span>
-                            </label>
-                        </div>
-                        <div class="wb-pos-wrapper">
-                            <select id="wb-pos-${entry.uid}" class="wb-input-dark inp-pos">${optionsHtml}</select>
-                            <input type="number" class="wb-inp-num inp-pos-depth" style="display:${curPosStr === 'at_depth' ? 'block' : 'none'}" value="${entry.depth ?? 4}" placeholder="D">
-                        </div>
-                        <div class="wb-ctrl-group order-group" title="顺序">
-                            <span>顺序</span>
-                            <input type="number" class="wb-inp-num inp-order" value="${entry.order ?? 0}">
-                        </div>
-                        <div class="wb-input-dark wb-token-display" title="Tokens">${Actions.getTokenCount(entry.content)}</div>
-                    </div>
-                </div>
-            </div>
-        `;
-
-        const bind = (sel, evt, fn) => {
-            const el = card.querySelector(sel);
-            if (el) el.addEventListener(evt, fn);
-        };
-
-        bind('.wb-inp-select', 'change', (e) => Actions.toggleSelect(entry.uid, e.target.checked));
-        bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
-        bind('.inp-enable', 'change', (e) => Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; }));
-        bind('.inp-type', 'change', (e) => Actions.updateEntry(entry.uid, (d) => {
-            d.constant = e.target.checked;
-            d.selective = !d.constant;
-        }));
-
-        bind('.inp-pos', 'change', (e) => {
-            const val = e.target.value;
-            const depthInput = card.querySelector('.inp-pos-depth');
-            if (depthInput) depthInput.style.display = val === 'at_depth' ? 'block' : 'none';
-            const intVal = WI_POSITION_MAP_REV[val] ?? 1;
-            Actions.updateEntry(entry.uid, (d) => { d.position = intVal; });
-        });
-
-        bind('.inp-pos-depth', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.depth = Number(e.target.value); }));
-        bind('.inp-order', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.order = Number(e.target.value); }));
-
-        bind('.btn-delete', 'click', () => Actions.deleteEntry(entry.uid));
-        bind('.btn-preview', 'click', () => UI.openContentPopup(entry));
-
-        return card;
-    },
-
-    openContentPopup(entry) {
-        const old = document.getElementById('wb-content-popup-overlay');
-        if (old) old.remove();
-
-        const overlay = document.createElement('div');
-        overlay.id = 'wb-content-popup-overlay';
-        overlay.className = 'wb-modal-overlay';
-
-        let tempContent = entry.content || '';
-        let tempKeys = (entry.key || []).map((k) => String(k).replace(/，/g, ',')).join(',');
-
-        overlay.innerHTML = `
-            <div class="wb-content-popup">
-                <div class="wb-popup-header">${esc(entry.comment || '未命名条目')}</div>
-                <input class="wb-popup-input-keys" placeholder="关键词 (英文逗号分隔)" value="${esc(tempKeys)}">
-                <textarea class="wb-popup-textarea" placeholder="在此编辑内容...">${esc(tempContent)}</textarea>
-                <div class="wb-popup-footer">
-                    <button class="wb-btn-black btn-cancel">取消</button>
-                    <button class="wb-btn-black btn-save">保存</button>
-                </div>
-            </div>
-        `;
-        document.body.appendChild(overlay);
-
-        const keysInput = overlay.querySelector('.wb-popup-input-keys');
-        const textarea = overlay.querySelector('.wb-popup-textarea');
-
-        textarea.oninput = (e) => { tempContent = e.target.value; };
-        keysInput.oninput = (e) => { tempKeys = e.target.value; };
-
-        const close = () => overlay.remove();
-        overlay.querySelector('.btn-cancel').onclick = close;
-
-        overlay.querySelector('.btn-save').onclick = () => {
-            Actions.updateEntry(entry.uid, (d) => { d.content = tempContent; });
-            const finalKeys = tempKeys.replace(/，/g, ',').split(',').map((s) => s.trim()).filter(Boolean);
-            Actions.updateEntry(entry.uid, (d) => { d.key = finalKeys; });
-            UI.updateCardStatus(entry.uid);
-            UI.renderGlobalStats();
-            close();
-        };
-
-        overlay.onclick = (e) => { if (e.target === overlay) close(); };
     },
 
     renderBindingView() {
@@ -1429,7 +1093,8 @@ const UI = {
             const filterList = (term) => {
                 const lower = term.toLowerCase();
                 listEl.querySelectorAll('.wb-ms-item').forEach((item) => {
-                    item.classList.toggle('hidden', !item.textContent.toLowerCase().includes(lower));
+                    if (item.textContent.toLowerCase().includes(lower)) item.classList.remove('hidden');
+                    else item.classList.add('hidden');
                 });
             };
 
@@ -1444,13 +1109,13 @@ const UI = {
                         tag.dataset.val = name;
                         tag.dataset.bindType = dataClass;
                         tag.innerHTML = `<span>${esc(name)}</span><span class="wb-ms-tag-close">×</span>`;
-                        tag.ondblclick = () => Actions.jumpToEditor(name);
                         tag.querySelector('.wb-ms-tag-close').onclick = (e) => {
                             e.stopPropagation();
                             selectedSet.delete(name);
                             refresh();
                             Actions.saveBindings();
                         };
+                        tag.ondblclick = () => Actions.loadBook(name).then(() => Actions.switchView('editor'));
                         tagsEl.appendChild(tag);
                     });
                 }
@@ -1464,13 +1129,13 @@ const UI = {
                         const item = document.createElement('div');
                         item.className = 'wb-ms-item';
                         item.textContent = name;
-                        item.ondblclick = () => Actions.jumpToEditor(name);
                         item.onclick = () => {
                             selectedSet.add(name);
                             inputEl.value = '';
                             refresh();
                             Actions.saveBindings();
                         };
+                        item.ondblclick = () => Actions.loadBook(name).then(() => Actions.switchView('editor'));
                         listEl.appendChild(item);
                     });
                     filterList(inputEl.value);
@@ -1494,147 +1159,465 @@ const UI = {
         };
 
         view.querySelector('#wb-bind-char-primary').innerHTML = createOpts(char.primary);
-        view.querySelector('#wb-bind-chat').innerHTML = createOpts(chat);
-
         createMultiSelect('#wb-bind-char-list', char.additional, 'wb-bind-char-add');
         createMultiSelect('#wb-bind-global-list', global, 'wb-bind-global');
+        view.querySelector('#wb-bind-chat').innerHTML = createOpts(chat);
 
         ['wb-bind-char-primary', 'wb-bind-chat'].forEach((id) => {
             const el = document.getElementById(id);
             if (el) {
                 el.onchange = () => Actions.saveBindings();
-                el.ondblclick = () => { if (el.value) Actions.jumpToEditor(el.value); };
+                el.ondblclick = () => {
+                    if (el.value) Actions.loadBook(el.value).then(() => Actions.switchView('editor'));
+                };
                 this.applyCustomDropdown(id);
             }
         });
+    },
+
+    renderGlobalStats() {
+        const countEl = document.getElementById('wb-display-count');
+        if (!countEl) return;
+
+        let blueTokens = 0;
+        let greenTokens = 0;
+
+        STATE.entries.forEach((entry) => {
+            if (entry.disable === false) {
+                const t = Actions.getTokenCount(entry.content);
+                if (entry.constant === true) blueTokens += t;
+                else greenTokens += t;
+            }
+        });
+
+        countEl.innerHTML = `
+            <span>${STATE.entries.length} 条目 | ${blueTokens + greenTokens} Tokens</span>
+            <span class="wb-token-breakdown">( <span class="wb-text-blue">${blueTokens}</span> + <span class="wb-text-green">${greenTokens}</span> )</span>
+        `;
+    },
+
+    renderList(filterText = '') {
+        const list = document.getElementById('wb-entry-list');
+        if (!list) return;
+        list.innerHTML = '';
+
+        const term = filterText.toLowerCase();
+
+        STATE.entries.forEach((entry, index) => {
+            const name = entry.comment || '';
+            if (term && !name.toLowerCase().includes(term)) return;
+            const card = this.createCard(entry, index);
+            list.appendChild(card);
+        });
+    },
+
+    createCard(entry, index) {
+        const isEnabled = !entry.disable;
+        const isConstant = !!entry.constant;
+        const keys = entry.key || [];
+
+        const card = document.createElement('div');
+        let typeClass = '';
+        if (isEnabled) typeClass = isConstant ? 'type-blue' : 'type-green';
+
+        card.className = `wb-card ${isEnabled ? '' : 'disabled'} ${typeClass}`;
+        card.dataset.uid = entry.uid;
+        card.dataset.index = index;
+
+        const curPosInt = typeof entry.position === 'number' ? entry.position : 1;
+        const curPosStr = WI_POSITION_MAP[curPosInt] || 'after_character_definition';
+
+        const allPosOptions = [
+            { v: 'before_character_definition', t: '角色定义之前' },
+            { v: 'after_character_definition', t: '角色定义之后' },
+            { v: 'before_example_messages', t: '示例消息之前' },
+            { v: 'after_example_messages', t: '示例消息之后' },
+            { v: 'before_author_note', t: '作者注释之前' },
+            { v: 'after_author_note', t: '作者注释之后' },
+            { v: 'at_depth', t: '@D' },
+        ];
+
+        let optionsHtml = '';
+        allPosOptions.forEach((opt) => {
+            const selected = opt.v === curPosStr ? 'selected' : '';
+            optionsHtml += `<option value="${opt.v}" ${selected}>${opt.t}</option>`;
+        });
+
+        const showWarning = isEnabled && !isConstant && !(keys.length > 0);
+        const warningIcon = showWarning
+            ? '<i class="fa-solid fa-circle-exclamation wb-warning-icon" data-wb-tooltip="警告：绿灯条目已启用但未设置关键词，将无法触发"></i>'
+            : '';
+
+        card.innerHTML = `
+            <div class="wb-card-header">
+                <div class="wb-card-main">
+                    <div class="wb-row">
+                        <input class="wb-inp-title inp-name" value="${esc(entry.comment)}" placeholder="条目名称">
+                        <div class="wb-warning-container">${warningIcon}</div>
+                        <i class="fa-solid fa-eye btn-preview" title="编辑内容"></i>
+                        <i class="fa-solid fa-trash btn-delete" title="删除条目"></i>
+                    </div>
+                    <div class="wb-row">
+                        <div class="wb-ctrl-group">
+                            <label class="wb-switch"><input type="checkbox" class="inp-enable" ${isEnabled ? 'checked' : ''}><span class="wb-slider purple"></span></label>
+                        </div>
+                        <div class="wb-ctrl-group">
+                            <label class="wb-switch"><input type="checkbox" class="inp-type" ${isConstant ? 'checked' : ''}><span class="wb-slider blue"></span></label>
+                        </div>
+                        <div class="wb-pos-wrapper">
+                            <select class="wb-input-dark inp-pos">${optionsHtml}</select>
+                            <input type="number" class="wb-inp-num inp-pos-depth" style="display:${curPosStr === 'at_depth' ? 'block' : 'none'}" value="${entry.depth ?? 4}">
+                        </div>
+                        <div class="wb-ctrl-group order-group"><span>顺序</span><input type="number" class="wb-inp-num inp-order" value="${entry.order ?? 0}"></div>
+                        <div class="wb-input-dark wb-token-display">${Actions.getTokenCount(entry.content)}</div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        const bind = (sel, evt, fn) => {
+            const el = card.querySelector(sel);
+            if (el) el.addEventListener(evt, fn);
+        };
+
+        bind('.inp-name', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.comment = e.target.value; }));
+        bind('.inp-enable', 'change', (e) => Actions.updateEntry(entry.uid, (d) => { d.disable = !e.target.checked; }));
+        bind('.inp-type', 'change', (e) => Actions.updateEntry(entry.uid, (d) => {
+            d.constant = e.target.checked;
+            d.selective = !d.constant;
+        }));
+
+        bind('.inp-pos', 'change', (e) => {
+            const val = e.target.value;
+            const depthInput = card.querySelector('.inp-pos-depth');
+            if (depthInput) depthInput.style.display = val === 'at_depth' ? 'block' : 'none';
+            const intVal = WI_POSITION_MAP_REV[val] ?? 1;
+            Actions.updateEntry(entry.uid, (d) => { d.position = intVal; });
+        });
+
+        bind('.inp-pos-depth', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.depth = Number(e.target.value); }));
+        bind('.inp-order', 'input', (e) => Actions.updateEntry(entry.uid, (d) => { d.order = Number(e.target.value); }));
+
+        bind('.btn-delete', 'click', () => Actions.deleteEntry(entry.uid));
+        bind('.btn-preview', 'click', () => UI.openContentPopup(entry));
+
+        return card;
+    },
+
+    updateCardStatus(uid) {
+        const entry = STATE.entries.find((e) => e.uid === uid);
+        const card = document.querySelector(`.wb-card[data-uid="${uid}"]`);
+        if (!entry || !card) return;
+
+        card.classList.remove('disabled', 'type-green', 'type-blue');
+
+        if (entry.disable) card.classList.add('disabled');
+        else if (entry.constant) card.classList.add('type-blue');
+        else card.classList.add('type-green');
+
+        const tokenEl = card.querySelector('.wb-token-display');
+        if (tokenEl) tokenEl.textContent = Actions.getTokenCount(entry.content);
+    },
+
+    openContentPopup(entry) {
+        const old = document.getElementById('wb-content-popup-overlay');
+        if (old) old.remove();
+
+        const overlay = document.createElement('div');
+        overlay.id = 'wb-content-popup-overlay';
+        overlay.className = 'wb-modal-overlay';
+
+        let tempContent = entry.content || '';
+        let tempKeys = (entry.key || []).map((k) => String(k).replace(/，/g, ',')).join(',');
+
+        overlay.innerHTML = `
+            <div class="wb-content-popup">
+                <div class="wb-popup-header"><span>${esc(entry.comment || '未命名条目')}</span></div>
+                <input class="wb-popup-input-keys" placeholder="关键词 (英文逗号分隔)" value="${esc(tempKeys)}">
+                <textarea class="wb-popup-textarea" placeholder="在此编辑内容...">${esc(tempContent)}</textarea>
+                <div class="wb-popup-footer">
+                    <button class="wb-btn-black btn-cancel">取消</button>
+                    <button class="wb-btn-black btn-save">保存</button>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+
+        const keysInput = overlay.querySelector('.wb-popup-input-keys');
+        const textarea = overlay.querySelector('.wb-popup-textarea');
+
+        textarea.oninput = (e) => { tempContent = e.target.value; };
+        keysInput.oninput = (e) => { tempKeys = e.target.value; };
+
+        const close = () => overlay.remove();
+
+        overlay.querySelector('.btn-cancel').onclick = close;
+        overlay.querySelector('.btn-save').onclick = () => {
+            Actions.updateEntry(entry.uid, (d) => { d.content = tempContent; });
+            const finalKeys = tempKeys.replace(/，/g, ',').split(',').map((s) => s.trim()).filter(Boolean);
+            Actions.updateEntry(entry.uid, (d) => { d.key = finalKeys; });
+            UI.updateCardStatus(entry.uid);
+            UI.renderGlobalStats();
+            close();
+        };
+
+        overlay.onclick = (e) => { if (e.target === overlay) close(); };
     },
 
     renderManageView(filterText = '') {
         const container = document.getElementById('wb-manage-content');
         if (!container) return;
 
-        const term = String(filterText || '').toLowerCase();
+        const term = filterText.toLowerCase();
         const boundMap = STATE.boundBooksSet || {};
+        const all = [...STATE.allBookNames].filter((name) => !term || name.toLowerCase().includes(term));
+        all.sort((a, b) => a.localeCompare(b));
 
         container.innerHTML = '';
-        STATE.allBookNames
-            .filter((name) => !term || name.toLowerCase().includes(term))
-            .forEach((bookName) => {
-                const boundChars = boundMap[bookName] || [];
-                const card = document.createElement('div');
-                card.className = 'wb-manage-card';
 
-                card.innerHTML = `
-                    <div class="wb-card-top">
-                        <div class="wb-card-info">
-                            <span class="wb-card-title">${esc(bookName)}</span>
-                            ${boundChars.length ? `<div class="wb-card-subtitle">${esc(boundChars.join(', '))}</div>` : ''}
-                        </div>
-                        <div class="wb-manage-icons">
-                            <div class="wb-icon-action btn-open" title="跳转编辑"><i class="fa-solid fa-eye"></i></div>
-                            <div class="wb-icon-action btn-bind" title="绑定到当前角色"><i class="fa-solid fa-link"></i></div>
-                            <div class="wb-icon-action btn-del" title="删除"><i class="fa-solid fa-trash"></i></div>
-                        </div>
+        all.forEach((bookName) => {
+            const boundChars = boundMap[bookName] || [];
+            const card = document.createElement('div');
+            card.className = 'wb-manage-card';
+
+            card.innerHTML = `
+                <div class="wb-card-top">
+                    <div class="wb-card-info">
+                        <span class="wb-card-title">${esc(bookName)}</span>
+                        ${boundChars.length ? `<div class="wb-card-subtitle"><i class="fa-solid fa-user-tag"></i> ${esc(boundChars.join(', '))}</div>` : ''}
                     </div>
-                `;
+                    <div class="wb-manage-icons">
+                        <div class="wb-icon-action btn-view" title="跳转编辑"><i class="fa-solid fa-eye"></i></div>
+                        <div class="wb-icon-action btn-bind" title="绑定当前角色主世界书"><i class="fa-solid fa-link"></i></div>
+                        <div class="wb-icon-action btn-del" title="删除世界书"><i class="fa-solid fa-trash"></i></div>
+                    </div>
+                </div>
+            `;
 
-                card.querySelector('.btn-open').onclick = () => Actions.jumpToEditor(bookName);
-                card.querySelector('.btn-bind').onclick = async () => {
-                    const context = getContext();
-                    const currentChar = context.characters[context.characterId]?.name;
-                    if (!currentChar) return toastr.warning('当前没有加载角色，无法绑定');
+            card.querySelector('.btn-view').onclick = () => {
+                Actions.loadBook(bookName).then(() => Actions.switchView('editor'));
+            };
+
+            card.querySelector('.btn-bind').onclick = async () => {
+                try {
                     await setCharBindings('primary', bookName, true);
                     await Actions.refreshAllContext();
-                    toastr.success(`已绑定为 ${currentChar} 的主世界书`);
-                    this.renderManageView(filterText);
-                };
-                card.querySelector('.btn-del').onclick = async () => {
-                    if (!confirm(`确定删除 "${bookName}" ?`)) return;
+                    toastr.success(`已绑定: ${bookName}`);
+                } catch (e) {
+                    toastr.error(`绑定失败: ${e.message}`);
+                }
+            };
+
+            card.querySelector('.btn-del').onclick = async () => {
+                if (!confirm(`确定要删除世界书 "${bookName}" 吗？`)) return;
+                try {
                     if (STATE.currentBookName === bookName && STATE.debouncer) {
                         clearTimeout(STATE.debouncer);
                         STATE.debouncer = null;
                     }
+
                     await API.deleteWorldbook(bookName);
+
                     if (STATE.currentBookName === bookName) {
                         STATE.currentBookName = null;
                         STATE.entries = [];
+                        UI.renderList();
+                        UI.renderGlobalStats();
                     }
+
                     await Actions.refreshAllContext();
-                    this.renderManageView(filterText);
-                    this.renderList(document.getElementById('wb-search-entry')?.value || '');
-                    this.renderGlobalStats();
-                };
+                    UI.renderManageView(filterText);
+                } catch (e) {
+                    toastr.error(`删除失败: ${e.message}`);
+                }
+            };
 
-                container.appendChild(card);
-            });
+            container.appendChild(card);
+        });
     },
 
-    getStitchVisible(side) {
-        const panel = STATE.stitch[side];
-        const term = (panel.search || '').trim().toLowerCase();
-        if (!term) return panel.entries;
-        return panel.entries.filter((e) => String(e.comment || '').toLowerCase().includes(term));
-    },
-
+    // -------- Stitch UI --------
     renderStitchView() {
-        const leftSel = document.getElementById('wb-stitch-left-book');
-        const rightSel = document.getElementById('wb-stitch-right-book');
-        if (!leftSel || !rightSel) return;
-
-        const all = STATE.allBookNames;
-        const leftBook = STATE.stitch.left.book;
-        const rightBook = STATE.stitch.right.book;
-
-        const optionsHtml = (current) => all.map((n) => `<option value="${esc(n)}" ${n === current ? 'selected' : ''}>${esc(n)}</option>`).join('');
-
-        leftSel.innerHTML = optionsHtml(leftBook);
-        rightSel.innerHTML = optionsHtml(rightBook);
-
-        this.applyCustomDropdown('wb-stitch-left-book');
-        this.applyCustomDropdown('wb-stitch-right-book');
-
-        const leftSearch = document.getElementById('wb-stitch-left-search');
-        const rightSearch = document.getElementById('wb-stitch-right-search');
-        if (leftSearch) leftSearch.value = STATE.stitch.left.search || '';
-        if (rightSearch) rightSearch.value = STATE.stitch.right.search || '';
+        const modeEl = document.getElementById('wb-stitch-mode');
+        if (modeEl) {
+            modeEl.value = STATE.stitch.mode;
+            modeEl.onchange = (e) => { STATE.stitch.mode = e.target.value; };
+        }
 
         this.renderStitchSide('left');
         this.renderStitchSide('right');
     },
 
-    renderStitchSide(side) {
-        const listEl = document.getElementById(`wb-stitch-${side}-list`);
-        const footEl = document.getElementById(`wb-stitch-${side}-foot`);
-        if (!listEl || !footEl) return;
+    renderStitchSide(sideKey) {
+        const side = sideKey === 'left' ? STATE.stitch.left : STATE.stitch.right;
+        const otherKey = sideKey === 'left' ? 'right' : 'left';
+        const all = STATE.allBookNames;
 
-        const panel = STATE.stitch[side];
-        const visible = this.getStitchVisible(side);
+        const bookSel = document.getElementById(`wb-stitch-${sideKey}-book`);
+        const searchInp = document.getElementById(`wb-stitch-${sideKey}-search`);
+        const listEl = document.getElementById(`wb-stitch-${sideKey}-list`);
+        const btnAll = document.getElementById(`wb-stitch-${sideKey}-all`);
+        const btnInvert = document.getElementById(`wb-stitch-${sideKey}-invert`);
+        const btnClear = document.getElementById(`wb-stitch-${sideKey}-clear`);
+        const btnCopy = document.getElementById(`wb-stitch-${sideKey}-copy`);
+        const btnMove = document.getElementById(`wb-stitch-${sideKey}-move`);
 
-        listEl.innerHTML = '';
-        visible.forEach((entry) => {
-            const item = document.createElement('div');
-            item.className = 'wb-stitch-item';
-            item.innerHTML = `
-                <label class="wb-stitch-item-check">
-                    <input type="checkbox" ${panel.selected.has(entry.uid) ? 'checked' : ''}>
-                </label>
-                <div class="wb-stitch-item-body">
-                    <div class="wb-stitch-item-title">${esc(entry.comment || '无标题条目')}</div>
-                    <div class="wb-stitch-item-meta">${esc(WI_POSITION_MAP[entry.position] || 'pos?')} / O:${entry.order ?? 0} / D:${entry.depth ?? 4} / T:${Actions.getTokenCount(entry.content)}</div>
-                </div>
-            `;
+        if (!bookSel || !searchInp || !listEl) return;
 
-            const chk = item.querySelector('input[type="checkbox"]');
-            chk.onchange = (e) => Actions.toggleStitchSelect(side, entry.uid, e.target.checked);
-
-            listEl.appendChild(item);
-        });
-
-        if (!visible.length) {
-            listEl.innerHTML = '<div class="wb-empty">没有匹配条目</div>';
+        if (!all.length) {
+            listEl.innerHTML = '<div class="wb-stitch-empty">暂无世界书</div>';
+            return;
         }
 
-        footEl.textContent = `已选 ${panel.selected.size} / 可见 ${visible.length} / 总计 ${panel.entries.length}`;
+        let options = '';
+        all.forEach((name) => {
+            const selected = name === side.book ? 'selected' : '';
+            options += `<option value="${esc(name)}" ${selected}>${esc(name)}</option>`;
+        });
+        bookSel.innerHTML = options;
+
+        bookSel.onchange = async (e) => {
+            await Actions.stitchLoadSide(sideKey, e.target.value, true);
+            this.renderStitchView();
+        };
+
+        searchInp.value = side.search || '';
+        searchInp.oninput = (e) => {
+            side.search = e.target.value || '';
+            this.renderStitchSide(sideKey);
+        };
+
+        if (btnAll) {
+            btnAll.onclick = () => {
+                const filtered = side.entries.filter((entry) => {
+                    const t = side.search.toLowerCase();
+                    return !t || String(entry.comment || '').toLowerCase().includes(t);
+                });
+                filtered.forEach((e) => side.selected.add(Number(e.uid)));
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnInvert) {
+            btnInvert.onclick = () => {
+                const filtered = side.entries.filter((entry) => {
+                    const t = side.search.toLowerCase();
+                    return !t || String(entry.comment || '').toLowerCase().includes(t);
+                });
+                filtered.forEach((e) => {
+                    const uid = Number(e.uid);
+                    if (side.selected.has(uid)) side.selected.delete(uid);
+                    else side.selected.add(uid);
+                });
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnClear) {
+            btnClear.onclick = () => {
+                side.selected.clear();
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnCopy) {
+            btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
+        }
+
+        if (btnMove) {
+            btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
+        }
+
+        const term = side.search.toLowerCase();
+        const filteredEntries = side.entries.filter((entry) => !term || String(entry.comment || '').toLowerCase().includes(term));
+
+        if (!filteredEntries.length) {
+            listEl.innerHTML = '<div class="wb-stitch-empty">无匹配条目</div>';
+        } else {
+            listEl.innerHTML = filteredEntries.map((entry) => {
+                const selected = side.selected.has(Number(entry.uid)) ? 'checked' : '';
+                const mode = entry.constant ? '常驻' : '非常驻';
+                const modeClass = entry.constant ? 'mode-blue' : 'mode-green';
+                const enabledText = entry.disable ? '关闭' : '启用';
+                return `
+                    <div class="wb-stitch-item" draggable="true" data-side="${sideKey}" data-uid="${entry.uid}">
+                        <input type="checkbox" class="wb-stitch-check" data-uid="${entry.uid}" ${selected}>
+                        <div class="wb-stitch-item-main">
+                            <div class="wb-stitch-item-title">${esc(entry.comment || `条目 ${entry.uid}`)}</div>
+                            <div class="wb-stitch-item-meta">
+                                <span class="${modeClass}">${mode}</span>
+                                <span>${enabledText}</span>
+                                <span>@${esc(WI_POSITION_MAP[entry.position] || entry.position)}</span>
+                                <span>uid:${entry.uid}</span>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-grip-lines wb-stitch-grip"></i>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        listEl.querySelectorAll('.wb-stitch-check').forEach((cb) => {
+            cb.onchange = (e) => {
+                const uid = Number(e.target.dataset.uid);
+                if (e.target.checked) side.selected.add(uid);
+                else side.selected.delete(uid);
+            };
+        });
+
+        listEl.querySelectorAll('.wb-stitch-item').forEach((item) => {
+            item.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/uid', item.dataset.uid);
+                e.dataTransfer.setData('text/from-side', sideKey);
+            });
+
+            item.ondblclick = () => {
+                const uid = Number(item.dataset.uid);
+                const target = side.entries.find((x) => Number(x.uid) === uid);
+                if (!target) return;
+                Actions.loadBook(side.book).then(() => {
+                    Actions.switchView('editor');
+                    setTimeout(() => {
+                        const card = document.querySelector(`.wb-card[data-uid="${uid}"] .btn-preview`);
+                        if (card) card.click();
+                    }, 80);
+                });
+            };
+        });
+
+        listEl.ondragover = (e) => {
+            e.preventDefault();
+            listEl.classList.add('drag-over');
+        };
+
+        listEl.ondragleave = () => {
+            listEl.classList.remove('drag-over');
+        };
+
+        listEl.ondrop = async (e) => {
+            e.preventDefault();
+            listEl.classList.remove('drag-over');
+
+            const uid = Number(e.dataTransfer.getData('text/uid'));
+            const fromSide = e.dataTransfer.getData('text/from-side');
+            if (!uid || !fromSide || fromSide === sideKey) return;
+
+            await Actions.stitchTransfer(fromSide, sideKey, [uid], STATE.stitch.mode);
+            this.renderStitchView();
+            toastr.success(STATE.stitch.mode === 'move' ? '已移动' : '已复制');
+        };
+
+        const pane = document.getElementById(`wb-stitch-${sideKey}-pane`);
+        if (pane) {
+            pane.querySelector('.wb-stitch-pane-title').textContent = `${sideKey === 'left' ? '左侧' : '右侧'}世界书（已选 ${side.selected.size}/${side.entries.length}）`;
+        }
+
+        const otherPane = document.getElementById(`wb-stitch-${otherKey}-pane`);
+        if (otherPane) {
+            otherPane.classList.remove('drag-over-pane');
+        }
     },
 
     applyCustomDropdown(selectId) {
@@ -1651,24 +1634,16 @@ const UI = {
             trigger.className = 'wb-gr-trigger';
 
             originalSelect.parentNode.insertBefore(trigger, originalSelect.nextSibling);
-            trigger.onclick = (e) => {
-                e.stopPropagation();
-                this.toggleCustomDropdown(selectId, trigger);
-            };
+            trigger.onclick = (e) => { e.stopPropagation(); this.toggleCustomDropdown(selectId, trigger); };
         }
 
         const update = () => {
             const selectedOpt = originalSelect.options[originalSelect.selectedIndex];
             trigger.textContent = selectedOpt ? selectedOpt.text : '请选择...';
         };
-        update();
 
-        if (!originalSelect._wbBindedChangeUpdate) {
-            originalSelect.addEventListener('change', update);
-            originalSelect._wbBindedChangeUpdate = true;
-        } else {
-            update();
-        }
+        update();
+        originalSelect.addEventListener('change', update);
     },
 
     toggleCustomDropdown(selectId, triggerElem) {
@@ -1680,8 +1655,6 @@ const UI = {
         }
 
         const originalSelect = document.getElementById(selectId);
-        if (!originalSelect) return;
-
         const dropdown = document.createElement('div');
         dropdown.id = 'wb-active-dropdown';
         dropdown.className = 'wb-gr-dropdown show';
@@ -1689,6 +1662,7 @@ const UI = {
 
         const searchBox = document.createElement('div');
         searchBox.className = 'wb-gr-search-box';
+
         const searchInput = document.createElement('input');
         searchInput.className = 'wb-gr-search-input';
         searchInput.placeholder = '搜索选项...';
@@ -1703,12 +1677,14 @@ const UI = {
             div.className = 'wb-gr-option';
             div.textContent = optNode.text;
             if (optNode.selected) div.classList.add('selected');
+
             div.onclick = (e) => {
                 e.stopPropagation();
                 originalSelect.value = optNode.value;
                 originalSelect.dispatchEvent(new Event('change'));
                 dropdown.remove();
             };
+
             optionsContainer.appendChild(div);
         };
 
@@ -1751,6 +1727,48 @@ const UI = {
         };
         setTimeout(() => document.addEventListener('click', closeHandler), 0);
     },
+
+    initTooltips() {
+        if (this._tooltipInited) return;
+        this._tooltipInited = true;
+
+        const tipEl = document.createElement('div');
+        tipEl.className = 'wb-tooltip';
+        document.body.appendChild(tipEl);
+
+        const show = (text, x, y) => {
+            tipEl.textContent = text;
+            tipEl.classList.add('show');
+
+            const rect = tipEl.getBoundingClientRect();
+            let left = x + 15;
+            let top = y + 15;
+            if (left + rect.width > window.innerWidth) left = x - rect.width - 5;
+            if (top + rect.height > window.innerHeight) top = y - rect.height - 5;
+
+            tipEl.style.left = `${left}px`;
+            tipEl.style.top = `${top}px`;
+        };
+
+        const hide = () => tipEl.classList.remove('show');
+
+        document.body.addEventListener('mouseover', (e) => {
+            const container = e.target.closest(`#${CONFIG.id}, .wb-modal-overlay`);
+            if (!container) return;
+
+            const target = e.target.closest('[title], [data-wb-tooltip]');
+            if (!target) return;
+
+            const text = target.getAttribute('title') || target.getAttribute('data-wb-tooltip');
+            if (target.getAttribute('title')) {
+                target.setAttribute('data-wb-tooltip', text);
+                target.removeAttribute('title');
+            }
+            if (text) show(text, e.clientX, e.clientY);
+        });
+
+        document.body.addEventListener('mouseout', hide);
+    },
 };
 
 jQuery(async () => {
@@ -1780,7 +1798,6 @@ jQuery(async () => {
     const performInit = async () => {
         try {
             await Actions.init();
-            console.log('[Worldbook Editor] Pre-loading complete.');
         } catch (e) {
             console.error('[Worldbook Editor] Pre-loading failed:', e);
         }
