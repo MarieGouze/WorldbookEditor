@@ -8,8 +8,10 @@ import {
 } from '../../../world-info.js';
 
 const CONFIG = {
-    id: 'enhanced-wb-panel-v6',
-    btnId: 'wb-menu-btn-v6',
+    id: 'enhanced-wb-panel-v7',
+    legacyId: 'enhanced-wb-panel-v6',
+    btnId: 'wb-menu-btn-v7',
+    legacyBtnId: 'wb-menu-btn-v6',
     settingsKey: 'WorldbookEditor_Metadata',
     presetStoreKey: '__ENTRY_STATE_PRESETS__',
 };
@@ -167,7 +169,6 @@ async function setCharBindings(type, worldName, isEnabled) {
             ? `/world silent=true "${worldName}"`
             : `/world state=off silent=true "${worldName}"`;
         await context.executeSlashCommands(command);
-        return;
     }
 }
 
@@ -226,7 +227,10 @@ const API = {
         entriesArray.forEach((entry) => {
             const uid = entry.uid;
             const oldEntry = (oldData.entries && oldData.entries[uid]) ? oldData.entries[uid] : {};
-            newEntriesObj[uid] = { ...oldEntry, ...cloneData(entry) };
+            newEntriesObj[uid] = {
+                ...oldEntry,
+                ...cloneData(entry),
+            };
         });
 
         const newData = { ...oldData, entries: newEntriesObj };
@@ -577,38 +581,22 @@ const Actions = {
 
     batchSetPosition(posKey) {
         const posVal = WI_POSITION_MAP_REV[posKey];
-        if (posVal === undefined) {
-            toastr.warning('请选择有效位置');
-            return;
-        }
-        this.batchMutate((entry) => {
-            entry.position = posVal;
-        });
+        if (posVal === undefined) return toastr.warning('请选择有效位置');
+        this.batchMutate((entry) => { entry.position = posVal; });
     },
 
     batchSetDepth(depthValue) {
         const depth = Number(depthValue);
-        if (!Number.isFinite(depth) || depth < 0) {
-            toastr.warning('深度请输入 >= 0 的数字');
-            return;
-        }
-        this.batchMutate((entry) => {
-            entry.depth = depth;
-        });
+        if (!Number.isFinite(depth) || depth < 0) return toastr.warning('深度请输入 >= 0 的数字');
+        this.batchMutate((entry) => { entry.depth = depth; });
     },
 
     batchSetOrder(startOrderValue) {
         const start = Number(startOrderValue);
-        if (!Number.isFinite(start)) {
-            toastr.warning('顺序请输入数字');
-            return;
-        }
+        if (!Number.isFinite(start)) return toastr.warning('顺序请输入数字');
 
         const selected = this.getSelectedEntries();
-        if (!selected.length) {
-            toastr.warning('请先选择条目');
-            return;
-        }
+        if (!selected.length) return toastr.warning('请先选择条目');
 
         selected
             .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid)
@@ -782,9 +770,7 @@ const Actions = {
                 const name = prompt('请输入导入后的世界书名称:', bookName);
                 if (!name) return;
 
-                if (STATE.allBookNames.includes(name) && !confirm(`世界书 "${name}" 已存在，是否覆盖？`)) {
-                    return;
-                }
+                if (STATE.allBookNames.includes(name) && !confirm(`世界书 "${name}" 已存在，是否覆盖？`)) return;
 
                 if (!STATE.allBookNames.includes(name)) await API.createWorldbook(name);
                 await API.saveBookEntries(name, entries);
@@ -863,6 +849,20 @@ const Actions = {
 const UI = {
     _resizeHandler: null,
 
+    cleanupLegacyNodes() {
+        const legacyPanel = document.getElementById(CONFIG.legacyId);
+        if (legacyPanel) legacyPanel.remove();
+
+        const currentPanel = document.getElementById(CONFIG.id);
+        if (currentPanel) currentPanel.remove();
+
+        const oldDrop = document.getElementById('wb-active-dropdown');
+        if (oldDrop) oldDrop.remove();
+
+        const oldPopup = document.getElementById('wb-content-popup-overlay');
+        if (oldPopup) oldPopup.remove();
+    },
+
     forcePanelLayout(panel = document.getElementById(CONFIG.id)) {
         if (!panel) return;
 
@@ -892,14 +892,16 @@ const UI = {
     },
 
     async open() {
-        if (document.getElementById(CONFIG.id)) return;
+        this.cleanupLegacyNodes();
 
         const panel = document.createElement('div');
         panel.id = CONFIG.id;
+        panel.dataset.version = 'v7-mobile-fix';
         panel.innerHTML = `
             <div class="wb-header-bar">
                 <div class="wb-tabs">
                     <div class="wb-tab active" data-tab="editor"><i class="fa-solid fa-pen-to-square"></i> 编辑世界书</div>
+                    <div class="wb-tab" data-tab="stitch"><i class="fa-solid fa-table-columns"></i> 缝合世界书</div>
                     <div class="wb-tab" data-tab="binding"><i class="fa-solid fa-link"></i> 绑定世界书</div>
                     <div class="wb-tab" data-tab="manage"><i class="fa-solid fa-list-check"></i> 管理世界书</div>
                 </div>
@@ -965,6 +967,10 @@ const UI = {
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
+                </div>
+
+                <div id="wb-view-stitch" class="wb-view-section wb-hidden">
+                    <div class="wb-empty">缝合功能保持原位（v7 先聚焦修复移动端显示）</div>
                 </div>
 
                 <div id="wb-view-binding" class="wb-view-section wb-hidden">
@@ -1078,9 +1084,7 @@ const UI = {
         const panel = document.getElementById(CONFIG.id);
         if (!panel) return;
 
-        if (viewName !== 'editor' && STATE.batchEditMode) {
-            this.toggleBatchEditMode(false);
-        }
+        if (viewName !== 'editor' && STATE.batchEditMode) this.toggleBatchEditMode(false);
 
         panel.querySelectorAll('.wb-tab').forEach((el) => {
             el.classList.toggle('active', el.dataset.tab === viewName);
@@ -1088,19 +1092,14 @@ const UI = {
 
         panel.querySelectorAll('.wb-view-section').forEach((el) => el.classList.add('wb-hidden'));
         const target = panel.querySelector(`#wb-view-${viewName}`);
-
-        if (target) {
-            target.classList.remove('wb-hidden');
-        } else {
-            const fallback = panel.querySelector('#wb-view-editor');
-            if (fallback) fallback.classList.remove('wb-hidden');
-        }
+        if (target) target.classList.remove('wb-hidden');
+        else panel.querySelector('#wb-view-editor')?.classList.remove('wb-hidden');
 
         if (viewName === 'binding') {
             this.renderBindingView();
         } else if (viewName === 'manage') {
             this.renderManageView();
-        } else {
+        } else if (viewName === 'editor') {
             this.renderBookSelector();
             this.renderPresetBar();
             this.renderGlobalStats();
@@ -1742,6 +1741,9 @@ const UI = {
 
 jQuery(async () => {
     const injectButton = () => {
+        const legacyBtn = document.getElementById(CONFIG.legacyBtnId);
+        if (legacyBtn) legacyBtn.remove();
+
         if (document.getElementById(CONFIG.btnId)) return;
 
         const container = document.querySelector('#options .options-content');
@@ -1767,6 +1769,7 @@ jQuery(async () => {
     const performInit = async () => {
         try {
             await Actions.init();
+            console.log('[WB Panel] v7-mobile-fix loaded');
         } catch (_e) {
             // noop
         }
