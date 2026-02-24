@@ -1,3 +1,4 @@
+// index.js
 import { getContext } from '../../../extensions.js';
 import { event_types, eventSource } from '../../../../script.js';
 import { getCharaFilename } from '../../../utils.js';
@@ -996,6 +997,7 @@ const Actions = {
 
 const UI = {
     _resizeHandler: null,
+    _popupViewportCleanup: null,
 
     forcePanelLayout(panel = document.getElementById(CONFIG.id)) {
         if (!panel) return;
@@ -1026,28 +1028,48 @@ const UI = {
         });
     },
 
-    closeBatchPopovers(panel = document.getElementById(CONFIG.id)) {
-        if (!panel) return;
-        panel.querySelectorAll('.wb-batch-popover').forEach((el) => el.classList.add('wb-hidden'));
-        panel.querySelectorAll('.wb-batch-main-btn').forEach((el) => el.classList.remove('active'));
+    syncPopupToVisualViewport(overlay) {
+        this.clearPopupViewportSync();
+
+        const isMobileLike = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
+        if (!isMobileLike || !overlay || !window.visualViewport) return;
+
+        const vv = window.visualViewport;
+        const update = () => {
+            const top = Math.max(0, Math.round(vv.offsetTop || 0));
+            const height = Math.max(240, Math.round(vv.height || window.innerHeight));
+            overlay.style.top = `${top}px`;
+            overlay.style.bottom = 'auto';
+            overlay.style.height = `${height}px`;
+        };
+
+        const onResize = () => update();
+        const onScroll = () => update();
+
+        vv.addEventListener('resize', onResize);
+        vv.addEventListener('scroll', onScroll);
+        window.addEventListener('orientationchange', onResize);
+
+        update();
+
+        this._popupViewportCleanup = () => {
+            vv.removeEventListener('resize', onResize);
+            vv.removeEventListener('scroll', onScroll);
+            window.removeEventListener('orientationchange', onResize);
+
+            if (overlay && overlay.isConnected) {
+                overlay.style.removeProperty('top');
+                overlay.style.removeProperty('bottom');
+                overlay.style.removeProperty('height');
+            }
+
+            this._popupViewportCleanup = null;
+        };
     },
 
-    toggleBatchPopover(kind) {
-        const panel = document.getElementById(CONFIG.id);
-        if (!panel) return;
-
-        const popId = `#wb-batch-pop-${kind}`;
-        const btnId = `#wb-batch-pop-${kind}-btn`;
-        const pop = panel.querySelector(popId);
-        const btn = panel.querySelector(btnId);
-        if (!pop || !btn) return;
-
-        const willOpen = pop.classList.contains('wb-hidden');
-        this.closeBatchPopovers(panel);
-
-        if (willOpen) {
-            pop.classList.remove('wb-hidden');
-            btn.classList.add('active');
+    clearPopupViewportSync() {
+        if (typeof this._popupViewportCleanup === 'function') {
+            this._popupViewportCleanup();
         }
     },
 
@@ -1099,78 +1121,30 @@ const UI = {
 
                     <div class="wb-batch-toolbar wb-hidden" id="wb-batch-toolbar">
                         <span id="wb-selection-info">已选 0/0</span>
+                        <button class="wb-btn-rect mini" id="wb-select-all">全选(可见)</button>
+                        <button class="wb-btn-rect mini" id="wb-select-invert">反选(可见)</button>
+                        <button class="wb-btn-rect mini" id="wb-select-clear">清空选择</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-enable">批量开启</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-disable">批量关闭</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-constant-on">设常驻</button>
+                        <button class="wb-btn-rect mini" id="wb-batch-constant-off">设非常驻</button>
 
-                        <button class="wb-btn-circle wb-batch-icon-btn wb-batch-main-btn" id="wb-batch-pop-select-btn" title="选择操作">
-                            <i class="fa-solid fa-check-double"></i>
-                        </button>
-                        <button class="wb-btn-circle wb-batch-icon-btn wb-batch-main-btn" id="wb-batch-pop-state-btn" title="状态操作">
-                            <i class="fa-solid fa-sliders"></i>
-                        </button>
-                        <button class="wb-btn-circle wb-batch-icon-btn wb-batch-main-btn" id="wb-batch-pop-advanced-btn" title="位置/顺序/深度">
-                            <i class="fa-solid fa-wand-magic-sparkles"></i>
-                        </button>
+                        <select id="wb-batch-position" class="wb-batch-select">
+                            <option value="before_character_definition">角色定义之前</option>
+                            <option value="after_character_definition">角色定义之后</option>
+                            <option value="before_author_note">作者注释之前</option>
+                            <option value="after_author_note">作者注释之后</option>
+                            <option value="at_depth">@D</option>
+                            <option value="before_example_messages">示例消息之前</option>
+                            <option value="after_example_messages">示例消息之后</option>
+                        </select>
+                        <button class="wb-btn-rect mini" id="wb-batch-position-apply">应用位置</button>
 
-                        <div class="wb-batch-popover wb-hidden" id="wb-batch-pop-select">
-                            <div class="wb-batch-pop-grid">
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-select-all" title="全选可见">
-                                    <i class="fa-solid fa-check-double"></i>
-                                </button>
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-select-invert" title="反选可见">
-                                    <i class="fa-solid fa-arrows-rotate"></i>
-                                </button>
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-select-clear" title="清空选择">
-                                    <i class="fa-solid fa-eraser"></i>
-                                </button>
-                            </div>
-                        </div>
+                        <input type="number" id="wb-batch-order" class="wb-batch-num" placeholder="顺序起始值">
+                        <button class="wb-btn-rect mini" id="wb-batch-order-apply">应用顺序</button>
 
-                        <div class="wb-batch-popover wb-hidden" id="wb-batch-pop-state">
-                            <div class="wb-batch-pop-grid">
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-batch-enable" title="批量开启">
-                                    <i class="fa-solid fa-toggle-on"></i>
-                                </button>
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-batch-disable" title="批量关闭">
-                                    <i class="fa-solid fa-toggle-off"></i>
-                                </button>
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-batch-constant-on" title="设常驻">
-                                    <i class="fa-solid fa-thumbtack"></i>
-                                </button>
-                                <button class="wb-btn-circle wb-batch-icon-btn" id="wb-batch-constant-off" title="设非常驻">
-                                    <i class="fa-regular fa-circle"></i>
-                                </button>
-                            </div>
-                        </div>
-
-                        <div class="wb-batch-popover wb-hidden" id="wb-batch-pop-advanced">
-                            <div class="wb-batch-adv-row">
-                                <select id="wb-batch-position" class="wb-batch-select">
-                                    <option value="before_character_definition">角色定义之前</option>
-                                    <option value="after_character_definition">角色定义之后</option>
-                                    <option value="before_author_note">作者注释之前</option>
-                                    <option value="after_author_note">作者注释之后</option>
-                                    <option value="at_depth">@D</option>
-                                    <option value="before_example_messages">示例消息之前</option>
-                                    <option value="after_example_messages">示例消息之后</option>
-                                </select>
-                                <button class="wb-btn-circle wb-batch-icon-btn wb-batch-adv-apply" id="wb-batch-position-apply" title="应用位置">
-                                    <i class="fa-solid fa-location-dot"></i>
-                                </button>
-                            </div>
-
-                            <div class="wb-batch-adv-row">
-                                <input type="number" id="wb-batch-order" class="wb-batch-num" placeholder="顺序起始值">
-                                <button class="wb-btn-circle wb-batch-icon-btn wb-batch-adv-apply" id="wb-batch-order-apply" title="应用顺序">
-                                    <i class="fa-solid fa-arrow-down-1-9"></i>
-                                </button>
-                            </div>
-
-                            <div class="wb-batch-adv-row">
-                                <input type="number" min="0" id="wb-batch-depth" class="wb-batch-num" placeholder="深度值">
-                                <button class="wb-btn-circle wb-batch-icon-btn wb-batch-adv-apply" id="wb-batch-depth-apply" title="应用深度">
-                                    <i class="fa-solid fa-layer-group"></i>
-                                </button>
-                            </div>
-                        </div>
+                        <input type="number" min="0" id="wb-batch-depth" class="wb-batch-num" placeholder="深度值">
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-apply">应用深度</button>
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
@@ -1266,6 +1240,11 @@ const UI = {
 
         $('#wb-close').onclick = async () => {
             await Actions.flushPendingSave();
+            this.clearPopupViewportSync();
+
+            const popupOverlay = document.getElementById('wb-content-popup-overlay');
+            if (popupOverlay) popupOverlay.remove();
+
             if (this._resizeHandler) {
                 window.removeEventListener('resize', this._resizeHandler);
                 this._resizeHandler = null;
@@ -1306,28 +1285,6 @@ const UI = {
         $('#wb-batch-order-apply').onclick = () => Actions.batchSetOrder($('#wb-batch-order').value);
         $('#wb-batch-depth-apply').onclick = () => Actions.batchSetDepth($('#wb-batch-depth').value);
 
-        $('#wb-batch-pop-select-btn').onclick = (e) => {
-            e.stopPropagation();
-            UI.toggleBatchPopover('select');
-        };
-        $('#wb-batch-pop-state-btn').onclick = (e) => {
-            e.stopPropagation();
-            UI.toggleBatchPopover('state');
-        };
-        $('#wb-batch-pop-advanced-btn').onclick = (e) => {
-            e.stopPropagation();
-            UI.toggleBatchPopover('advanced');
-        };
-
-        ['#wb-batch-pop-select', '#wb-batch-pop-state', '#wb-batch-pop-advanced'].forEach((sid) => {
-            const el = panel.querySelector(sid);
-            if (el) el.onclick = (e) => e.stopPropagation();
-        });
-
-        panel.addEventListener('click', () => {
-            UI.closeBatchPopovers(panel);
-        });
-
         const fileInput = $('#wb-import-file');
         fileInput.onchange = (e) => {
             if (e.target.files.length > 0) {
@@ -1362,10 +1319,6 @@ const UI = {
 
         if (viewName !== 'editor' && STATE.batchEditMode) {
             this.toggleBatchEditMode(false);
-        }
-
-        if (viewName !== 'editor') {
-            this.closeBatchPopovers(panel);
         }
 
         panel.querySelectorAll('.wb-tab').forEach((el) => {
@@ -1405,11 +1358,8 @@ const UI = {
         STATE.batchEditMode = next;
         this.applyBatchEditState();
 
-        const panel = document.getElementById(CONFIG.id);
         const bar = document.getElementById('wb-batch-toolbar');
-
         if (!next) {
-            this.closeBatchPopovers(panel);
             Actions.clearSelection();
         } else {
             this.updateSelectionInfo();
@@ -1428,10 +1378,6 @@ const UI = {
         if (bar) bar.classList.toggle('wb-hidden', !STATE.batchEditMode);
         if (btn) btn.classList.toggle('active', STATE.batchEditMode);
         panel.classList.toggle('wb-batch-editing', STATE.batchEditMode);
-
-        if (!STATE.batchEditMode) {
-            this.closeBatchPopovers(panel);
-        }
     },
 
     renderBookSelector() {
@@ -1801,6 +1747,8 @@ const UI = {
     },
 
     openContentPopup(entry) {
+        this.clearPopupViewportSync();
+
         const old = document.getElementById('wb-content-popup-overlay');
         if (old) old.remove();
 
@@ -1824,6 +1772,7 @@ const UI = {
         `;
 
         document.body.appendChild(overlay);
+        this.syncPopupToVisualViewport(overlay);
 
         const keysInput = overlay.querySelector('.wb-popup-input-keys');
         const textarea = overlay.querySelector('.wb-popup-textarea');
@@ -1831,7 +1780,10 @@ const UI = {
         textarea.oninput = (e) => { tempContent = e.target.value; };
         keysInput.oninput = (e) => { tempKeys = e.target.value; };
 
-        const close = () => overlay.remove();
+        const close = () => {
+            this.clearPopupViewportSync();
+            overlay.remove();
+        };
 
         overlay.querySelector('.btn-cancel').onclick = close;
         overlay.querySelector('.btn-save').onclick = () => {
