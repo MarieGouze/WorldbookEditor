@@ -172,7 +172,10 @@ async function setCharBindings(type, worldName, isEnabled) {
             ? `/world silent=true "${worldName}"`
             : `/world state=off silent=true "${worldName}"`;
         await context.executeSlashCommands(command);
+        return;
     }
+
+    console.warn(`未知绑定类型: ${type}`);
 }
 
 const API = {
@@ -204,7 +207,8 @@ const API = {
     },
 
     async getChatBinding() {
-        return getContext().chatMetadata?.world_info || null;
+        const context = getContext();
+        return context.chatMetadata?.world_info || null;
     },
 
     async loadBook(name) {
@@ -230,7 +234,10 @@ const API = {
         entriesArray.forEach((entry) => {
             const uid = entry.uid;
             const oldEntry = (oldData.entries && oldData.entries[uid]) ? oldData.entries[uid] : {};
-            newEntriesObj[uid] = { ...oldEntry, ...cloneData(entry) };
+            newEntriesObj[uid] = {
+                ...oldEntry,
+                ...cloneData(entry),
+            };
         });
 
         const newData = { ...oldData, entries: newEntriesObj };
@@ -266,7 +273,8 @@ const API = {
     },
 
     getMetadata() {
-        return getContext().extensionSettings[CONFIG.settingsKey] || {};
+        const context = getContext();
+        return context.extensionSettings[CONFIG.settingsKey] || {};
     },
 
     async saveMetadata(data) {
@@ -314,7 +322,8 @@ const API = {
             if (chatBinding === oldName) {
                 await setCharBindings('chat', newName, true);
             }
-        } catch (_e) {
+        } catch (e) {
+            console.error('绑定迁移失败:', e);
             toastr.warning('重命名成功，但绑定迁移遇到错误');
         }
 
@@ -352,6 +361,7 @@ const Actions = {
             ?? 4;
 
         const pos = typeof entry.position === 'number' ? entry.position : 1;
+
         if (pos === 0) return 100000;
         if (pos === 1) return 90000;
         if (pos === 5) return 80000;
@@ -359,6 +369,7 @@ const Actions = {
         if (pos === 4) return entry.depth ?? 4;
         if (pos === 2) return anDepth + 0.6;
         if (pos === 3) return anDepth + 0.4;
+
         return -9999;
     },
 
@@ -418,8 +429,8 @@ const Actions = {
 
             if (STATE.currentView === 'manage') UI.renderManageView();
             if (STATE.currentView === 'stitch') UI.renderStitchView();
-        } catch (_e) {
-            // noop
+        } catch (e) {
+            console.error('Failed to refresh context:', e);
         }
     },
 
@@ -430,27 +441,34 @@ const Actions = {
 
     async loadBook(name) {
         if (!name) return;
-        await this.flushPendingSave();
 
+        await this.flushPendingSave();
         STATE.currentBookName = name;
         STATE.selectedUids.clear();
 
-        const loadedEntries = await API.loadBook(name);
-        if (STATE.currentBookName !== name) return;
+        try {
+            const loadedEntries = await API.loadBook(name);
+            if (STATE.currentBookName !== name) return;
 
-        STATE.entries = loadedEntries;
-        STATE.entries.sort((a, b) => {
-            const scoreA = this.getEntrySortScore(a);
-            const scoreB = this.getEntrySortScore(b);
-            if (scoreA !== scoreB) return scoreB - scoreA;
-            return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
-        });
+            STATE.entries = loadedEntries;
+            STATE.entries.sort((a, b) => {
+                const scoreA = this.getEntrySortScore(a);
+                const scoreB = this.getEntrySortScore(b);
+                if (scoreA !== scoreB) return scoreB - scoreA;
+                return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
+            });
 
-        UI.renderBookSelector();
-        UI.renderPresetBar();
-        UI.renderGlobalStats();
-        UI.renderList(STATE.editorSearch || '');
-        UI.updateSelectionInfo();
+            UI.renderBookSelector();
+            UI.renderPresetBar();
+            UI.renderGlobalStats();
+            UI.renderList(STATE.editorSearch || '');
+            UI.updateSelectionInfo();
+        } catch (e) {
+            if (STATE.currentBookName === name) {
+                console.error('Load book failed', e);
+                toastr.error(`无法加载世界书 "${name}"`);
+            }
+        }
     },
 
     updateEntry(uid, updater) {
@@ -498,9 +516,11 @@ const Actions = {
             const scoreA = this.getEntrySortScore(a);
             const scoreB = this.getEntrySortScore(b);
             if (scoreA !== scoreB) return scoreB - scoreA;
+
             const orderA = a.order ?? 0;
             const orderB = b.order ?? 0;
             if (orderA !== orderB) return orderA - orderB;
+
             return a.uid - b.uid;
         });
 
@@ -582,6 +602,7 @@ const Actions = {
             toastr.warning('请选择有效位置');
             return;
         }
+
         this.batchMutate((entry) => {
             entry.position = posVal;
         });
@@ -593,6 +614,7 @@ const Actions = {
             toastr.warning('深度请输入 >= 0 的数字');
             return;
         }
+
         this.batchMutate((entry) => {
             entry.depth = depth;
         });
@@ -618,13 +640,16 @@ const Actions = {
             });
 
         STATE.entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid);
+
         UI.renderList(STATE.editorSearch);
         UI.renderGlobalStats();
         this.queueSave();
     },
 
     getPresetStore() {
-        if (!STATE.metadata[CONFIG.presetStoreKey]) STATE.metadata[CONFIG.presetStoreKey] = {};
+        if (!STATE.metadata[CONFIG.presetStoreKey]) {
+            STATE.metadata[CONFIG.presetStoreKey] = {};
+        }
         return STATE.metadata[CONFIG.presetStoreKey];
     },
 
@@ -634,7 +659,10 @@ const Actions = {
     },
 
     async saveCurrentPreset() {
-        if (!STATE.currentBookName) return toastr.warning('请先选择世界书');
+        if (!STATE.currentBookName) {
+            toastr.warning('请先选择世界书');
+            return;
+        }
 
         const defaultName = `状态_${new Date().toLocaleTimeString().replace(/:/g, '-')}`;
         const name = prompt('输入状态名称：', defaultName);
@@ -674,16 +702,23 @@ const Actions = {
     },
 
     async applyPreset(presetId) {
-        if (!STATE.currentBookName || !presetId) return toastr.warning('请选择一个状态');
+        if (!STATE.currentBookName || !presetId) {
+            toastr.warning('请选择一个状态');
+            return;
+        }
 
         const list = this.getBookPresets(STATE.currentBookName);
         const preset = list.find((p) => p.id === presetId);
-        if (!preset) return toastr.warning('状态不存在');
+        if (!preset) {
+            toastr.warning('状态不存在');
+            return;
+        }
 
         const snapshot = preset.snapshot || {};
         STATE.entries.forEach((entry) => {
             const snap = snapshot[entry.uid];
             if (!snap) return;
+
             entry.disable = !!snap.disable;
             entry.constant = !!snap.constant;
             entry.selective = !entry.constant;
@@ -693,6 +728,7 @@ const Actions = {
         });
 
         STATE.entries.sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid);
+
         UI.renderList(STATE.editorSearch);
         UI.renderGlobalStats();
         this.queueSave();
@@ -700,11 +736,15 @@ const Actions = {
     },
 
     async deletePreset(presetId) {
-        if (!STATE.currentBookName || !presetId) return toastr.warning('请选择要删除的状态');
+        if (!STATE.currentBookName || !presetId) {
+            toastr.warning('请选择要删除的状态');
+            return;
+        }
 
         const list = this.getBookPresets(STATE.currentBookName);
         const idx = list.findIndex((p) => p.id === presetId);
         if (idx < 0) return;
+
         if (!confirm(`确定删除状态 "${list[idx].name}" 吗？`)) return;
 
         list.splice(idx, 1);
@@ -730,27 +770,36 @@ const Actions = {
 
         const chatBook = view.querySelector('#wb-bind-chat').value;
 
-        await setCharBindings('primary', charPrimary || '', !!charPrimary);
+        try {
+            await setCharBindings('primary', charPrimary || '', !!charPrimary);
 
-        const context = getContext();
-        const charId = context.characterId;
-        if (charId || charId === 0) {
-            const charAvatar = context.characters[charId]?.avatar;
-            const charFileName = getCharaFilename(null, { manualAvatarKey: charAvatar });
-            charSetAuxWorlds(charFileName, charAdditional);
+            const context = getContext();
+            const charId = context.characterId;
+            if (charId || charId === 0) {
+                const charAvatar = context.characters[charId]?.avatar;
+                const charFileName = getCharaFilename(null, { manualAvatarKey: charAvatar });
+                charSetAuxWorlds(charFileName, charAdditional);
+            }
+
+            const currentGlobal = await API.getGlobalBindings();
+            const toRemove = currentGlobal.filter((b) => !globalBooks.includes(b));
+            const toAdd = globalBooks.filter((b) => !currentGlobal.includes(b));
+
+            for (const book of toRemove) {
+                await setCharBindings('global', book, false);
+            }
+            for (const book of toAdd) {
+                await setCharBindings('global', book, true);
+            }
+
+            await setCharBindings('chat', chatBook || '', !!chatBook);
+
+            await this.refreshAllContext();
+            toastr.success('绑定设置已保存');
+        } catch (e) {
+            console.error(e);
+            toastr.error(`保存失败: ${e.message}`);
         }
-
-        const currentGlobal = await API.getGlobalBindings();
-        const toRemove = currentGlobal.filter((b) => !globalBooks.includes(b));
-        const toAdd = globalBooks.filter((b) => !currentGlobal.includes(b));
-
-        for (const book of toRemove) await setCharBindings('global', book, false);
-        for (const book of toAdd) await setCharBindings('global', book, true);
-
-        await setCharBindings('chat', chatBook || '', !!chatBook);
-
-        await this.refreshAllContext();
-        toastr.success('绑定设置已保存');
     },
 
     getTokenCount(text) {
@@ -794,6 +843,7 @@ const Actions = {
                 await this.refreshAllContext();
                 await this.loadBook(name);
             } catch (err) {
+                console.error(err);
                 toastr.error(`导入失败: ${err.message}`);
             }
         };
@@ -804,18 +854,24 @@ const Actions = {
     async actionExport() {
         if (!STATE.currentBookName) return toastr.warning('请先选择一本世界书');
 
-        const entries = await API.loadBook(STATE.currentBookName);
-        const entriesObj = {};
-        entries.forEach((entry) => { entriesObj[entry.uid] = entry; });
+        try {
+            const entries = await API.loadBook(STATE.currentBookName);
+            const entriesObj = {};
+            entries.forEach((entry) => {
+                entriesObj[entry.uid] = entry;
+            });
 
-        const exportData = { entries: entriesObj };
-        const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${STATE.currentBookName}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
+            const exportData = { entries: entriesObj };
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `${STATE.currentBookName}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (e) {
+            toastr.error(`导出失败: ${e.message}`);
+        }
     },
 
     async actionCreateNew() {
@@ -823,29 +879,37 @@ const Actions = {
         if (!name) return;
         if (STATE.allBookNames.includes(name)) return toastr.warning('该名称已存在');
 
-        await API.createWorldbook(name);
-        await this.refreshAllContext();
-        await this.loadBook(name);
+        try {
+            await API.createWorldbook(name);
+            await this.refreshAllContext();
+            await this.loadBook(name);
+        } catch (e) {
+            toastr.error(`创建失败: ${e.message}`);
+        }
     },
 
     async actionDelete() {
         if (!STATE.currentBookName) return;
         if (!confirm(`确定要永久删除世界书 "${STATE.currentBookName}" 吗？`)) return;
 
-        if (STATE.debouncer) {
-            clearTimeout(STATE.debouncer);
-            STATE.debouncer = null;
+        try {
+            if (STATE.debouncer) {
+                clearTimeout(STATE.debouncer);
+                STATE.debouncer = null;
+            }
+
+            await API.deleteWorldbook(STATE.currentBookName);
+            STATE.currentBookName = null;
+            STATE.entries = [];
+            STATE.selectedUids.clear();
+
+            await this.refreshAllContext();
+            UI.renderList();
+            UI.renderGlobalStats();
+            UI.updateSelectionInfo();
+        } catch (e) {
+            toastr.error(`删除失败: ${e.message}`);
         }
-
-        await API.deleteWorldbook(STATE.currentBookName);
-        STATE.currentBookName = null;
-        STATE.entries = [];
-        STATE.selectedUids.clear();
-
-        await this.refreshAllContext();
-        UI.renderList();
-        UI.renderGlobalStats();
-        UI.updateSelectionInfo();
     },
 
     async actionRename() {
@@ -854,10 +918,14 @@ const Actions = {
         if (!newName || newName === STATE.currentBookName) return;
         if (STATE.allBookNames.includes(newName)) return toastr.warning('目标名称已存在');
 
-        await this.flushPendingSave();
-        await API.renameWorldbook(STATE.currentBookName, newName);
-        await this.refreshAllContext();
-        await this.loadBook(newName);
+        try {
+            await this.flushPendingSave();
+            await API.renameWorldbook(STATE.currentBookName, newName);
+            await this.refreshAllContext();
+            await this.loadBook(newName);
+        } catch (e) {
+            toastr.error(`重命名失败: ${e.message}`);
+        }
     },
 
     stitchSide(side) {
@@ -974,36 +1042,6 @@ const Actions = {
 };
 
 const UI = {
-    _resizeHandler: null,
-
-    forcePanelLayout(panel = document.getElementById(CONFIG.id)) {
-        if (!panel) return;
-
-        panel.style.position = 'fixed';
-        panel.style.inset = '0';
-        panel.style.width = '100vw';
-        panel.style.height = '100vh';
-        panel.style.height = '100dvh';
-        panel.style.display = 'flex';
-        panel.style.flexDirection = 'column';
-        panel.style.overflow = 'hidden';
-        panel.style.zIndex = '20000';
-
-        const content = panel.querySelector('.wb-content');
-        if (content) {
-            content.style.display = 'flex';
-            content.style.flexDirection = 'column';
-            content.style.flex = '1 1 auto';
-            content.style.minHeight = '0';
-            content.style.overflow = 'hidden';
-        }
-
-        panel.querySelectorAll('.wb-view-section').forEach((view) => {
-            view.style.flex = '1 1 auto';
-            view.style.minHeight = '0';
-        });
-    },
-
     async open() {
         if (document.getElementById(CONFIG.id)) return;
 
@@ -1161,20 +1199,12 @@ const UI = {
             </div>
         `;
         document.body.appendChild(panel);
-        this.forcePanelLayout(panel);
-
-        this._resizeHandler = () => this.forcePanelLayout(panel);
-        window.addEventListener('resize', this._resizeHandler);
 
         const $ = (sel) => panel.querySelector(sel);
         const $$ = (sel) => panel.querySelectorAll(sel);
 
         $('#wb-close').onclick = async () => {
             await Actions.flushPendingSave();
-            if (this._resizeHandler) {
-                window.removeEventListener('resize', this._resizeHandler);
-                this._resizeHandler = null;
-            }
             panel.remove();
         };
 
@@ -1240,26 +1270,17 @@ const UI = {
     },
 
     switchView(viewName) {
-        const panel = document.getElementById(CONFIG.id);
-        if (!panel) return;
-
         if (viewName !== 'editor' && STATE.batchEditMode) {
             this.toggleBatchEditMode(false);
         }
 
-        panel.querySelectorAll('.wb-tab').forEach((el) => {
+        document.querySelectorAll('.wb-tab').forEach((el) => {
             el.classList.toggle('active', el.dataset.tab === viewName);
         });
 
-        panel.querySelectorAll('.wb-view-section').forEach((el) => el.classList.add('wb-hidden'));
-        const target = panel.querySelector(`#wb-view-${viewName}`);
-
-        if (target) {
-            target.classList.remove('wb-hidden');
-        } else {
-            const fallback = panel.querySelector('#wb-view-editor');
-            if (fallback) fallback.classList.remove('wb-hidden');
-        }
+        document.querySelectorAll('.wb-view-section').forEach((el) => el.classList.add('wb-hidden'));
+        const target = document.getElementById(`wb-view-${viewName}`);
+        if (target) target.classList.remove('wb-hidden');
 
         if (viewName === 'binding') {
             this.renderBindingView();
@@ -1267,7 +1288,7 @@ const UI = {
             this.renderManageView();
         } else if (viewName === 'stitch') {
             Actions.ensureStitchBooks().then(() => this.renderStitchView());
-        } else {
+        } else if (viewName === 'editor') {
             this.renderBookSelector();
             this.renderPresetBar();
             this.renderGlobalStats();
@@ -1275,8 +1296,6 @@ const UI = {
             this.updateSelectionInfo();
             this.applyBatchEditState();
         }
-
-        this.forcePanelLayout(panel);
     },
 
     toggleBatchEditMode(forceVal = null) {
@@ -1284,26 +1303,37 @@ const UI = {
         STATE.batchEditMode = next;
         this.applyBatchEditState();
 
-        const bar = document.getElementById('wb-batch-toolbar');
         if (!next) {
             Actions.clearSelection();
         } else {
             this.updateSelectionInfo();
-            const isMobile = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
-            if (isMobile && bar) bar.scrollIntoView({ block: 'start', behavior: 'smooth' });
         }
     },
 
     applyBatchEditState() {
         const panel = document.getElementById(CONFIG.id);
-        if (!panel) return;
-
-        const bar = panel.querySelector('#wb-batch-toolbar');
-        const btn = panel.querySelector('#btn-toggle-batch-edit');
+        const bar = document.getElementById('wb-batch-toolbar');
+        const btn = document.getElementById('btn-toggle-batch-edit');
 
         if (bar) bar.classList.toggle('wb-hidden', !STATE.batchEditMode);
         if (btn) btn.classList.toggle('active', STATE.batchEditMode);
-        panel.classList.toggle('wb-batch-editing', STATE.batchEditMode);
+        if (panel) panel.classList.toggle('wb-batch-editing', STATE.batchEditMode);
+    },
+
+    openBookFromBinding(bookName) {
+        const name = String(bookName || '').trim();
+        if (!name) return;
+        if (!STATE.allBookNames.includes(name)) {
+            toastr.warning(`世界书不存在: ${name}`);
+            return;
+        }
+
+        Actions.loadBook(name)
+            .then(() => Actions.switchView('editor'))
+            .catch((e) => {
+                console.error('从绑定页跳转编辑失败:', e);
+                toastr.error(`无法打开世界书: ${name}`);
+            });
     },
 
     renderBookSelector() {
@@ -1420,7 +1450,14 @@ const UI = {
                         tag.className = 'wb-ms-tag';
                         tag.dataset.val = name;
                         tag.dataset.bindType = dataClass;
+                        tag.title = '双击进入编辑';
                         tag.innerHTML = `<span>${esc(name)}</span><span class="wb-ms-tag-close">×</span>`;
+
+                        tag.ondblclick = (e) => {
+                            e.stopPropagation();
+                            this.openBookFromBinding(name);
+                        };
+
                         tag.querySelector('.wb-ms-tag-close').onclick = (e) => {
                             e.stopPropagation();
                             selectedSet.delete(name);
@@ -1471,9 +1508,29 @@ const UI = {
 
         ['wb-bind-char-primary', 'wb-bind-chat'].forEach((id) => {
             const el = document.getElementById(id);
-            if (el) {
-                el.onchange = () => Actions.saveBindings();
-                this.applyCustomDropdown(id);
+            if (!el) return;
+
+            const openCurrentSelected = () => {
+                const selectedBook = el.value;
+                if (!selectedBook) return;
+                this.openBookFromBinding(selectedBook);
+            };
+
+            el.onchange = () => Actions.saveBindings();
+            el.ondblclick = (e) => {
+                e.stopPropagation();
+                openCurrentSelected();
+            };
+
+            this.applyCustomDropdown(id);
+
+            const trigger = document.getElementById(`wb-trigger-${id}`);
+            if (trigger) {
+                trigger.title = '双击进入编辑';
+                trigger.ondblclick = (e) => {
+                    e.stopPropagation();
+                    openCurrentSelected();
+                };
             }
         });
     },
@@ -1634,6 +1691,7 @@ const UI = {
         if (!entry || !card) return;
 
         card.classList.remove('disabled', 'type-green', 'type-blue');
+
         if (entry.disable) card.classList.add('disabled');
         else if (entry.constant) card.classList.add('type-blue');
         else card.classList.add('type-green');
@@ -1725,32 +1783,39 @@ const UI = {
             };
 
             card.querySelector('.btn-bind').onclick = async () => {
-                await setCharBindings('primary', bookName, true);
-                await Actions.refreshAllContext();
-                toastr.success(`已绑定: ${bookName}`);
+                try {
+                    await setCharBindings('primary', bookName, true);
+                    await Actions.refreshAllContext();
+                    toastr.success(`已绑定: ${bookName}`);
+                } catch (e) {
+                    toastr.error(`绑定失败: ${e.message}`);
+                }
             };
 
             card.querySelector('.btn-del').onclick = async () => {
                 if (!confirm(`确定要删除世界书 "${bookName}" 吗？`)) return;
+                try {
+                    if (STATE.currentBookName === bookName && STATE.debouncer) {
+                        clearTimeout(STATE.debouncer);
+                        STATE.debouncer = null;
+                    }
 
-                if (STATE.currentBookName === bookName && STATE.debouncer) {
-                    clearTimeout(STATE.debouncer);
-                    STATE.debouncer = null;
+                    await API.deleteWorldbook(bookName);
+
+                    if (STATE.currentBookName === bookName) {
+                        STATE.currentBookName = null;
+                        STATE.entries = [];
+                        STATE.selectedUids.clear();
+                        UI.renderList();
+                        UI.renderGlobalStats();
+                        UI.updateSelectionInfo();
+                    }
+
+                    await Actions.refreshAllContext();
+                    UI.renderManageView(filterText);
+                } catch (e) {
+                    toastr.error(`删除失败: ${e.message}`);
                 }
-
-                await API.deleteWorldbook(bookName);
-
-                if (STATE.currentBookName === bookName) {
-                    STATE.currentBookName = null;
-                    STATE.entries = [];
-                    STATE.selectedUids.clear();
-                    UI.renderList();
-                    UI.renderGlobalStats();
-                    UI.updateSelectionInfo();
-                }
-
-                await Actions.refreshAllContext();
-                UI.renderManageView(filterText);
             };
 
             container.appendChild(card);
@@ -2092,8 +2157,8 @@ jQuery(async () => {
     const performInit = async () => {
         try {
             await Actions.init();
-        } catch (_e) {
-            // noop
+        } catch (e) {
+            console.error('[Worldbook Editor] Pre-loading failed:', e);
         }
     };
 
@@ -2102,4 +2167,6 @@ jQuery(async () => {
     } else {
         performInit();
     }
+
+    console.log('Worldbook Editor Enhanced Script Loaded');
 });
