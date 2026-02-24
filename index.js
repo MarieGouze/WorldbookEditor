@@ -999,6 +999,20 @@ const UI = {
     _resizeHandler: null,
     _popupViewportCleanup: null,
 
+    isTouchLike() {
+        return window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(hover: none)').matches;
+    },
+
+    removeNativeTitles(root = document) {
+        if (!this.isTouchLike() || !root) return;
+        root.querySelectorAll('[title]').forEach((el) => {
+            const titleText = el.getAttribute('title');
+            if (!titleText) return;
+            if (!el.dataset.wbTooltip) el.dataset.wbTooltip = titleText;
+            el.removeAttribute('title');
+        });
+    },
+
     forcePanelLayout(panel = document.getElementById(CONFIG.id)) {
         if (!panel) return;
 
@@ -1231,6 +1245,7 @@ const UI = {
         `;
         document.body.appendChild(panel);
         this.forcePanelLayout(panel);
+        this.removeNativeTitles(panel);
 
         this._resizeHandler = () => this.forcePanelLayout(panel);
         window.addEventListener('resize', this._resizeHandler);
@@ -1351,6 +1366,7 @@ const UI = {
         }
 
         this.forcePanelLayout(panel);
+        this.removeNativeTitles(panel);
     },
 
     toggleBatchEditMode(forceVal = null) {
@@ -1421,6 +1437,7 @@ const UI = {
         selector.innerHTML = html;
         if (STATE.currentBookName) selector.value = STATE.currentBookName;
         this.applyCustomDropdown('wb-book-selector');
+        this.removeNativeTitles(selector.parentElement || selector);
     },
 
     renderPresetBar() {
@@ -1578,6 +1595,8 @@ const UI = {
                 this.applyCustomDropdown(id);
             }
         });
+
+        this.removeNativeTitles(view);
     },
 
     renderGlobalStats() {
@@ -1627,6 +1646,7 @@ const UI = {
 
         this.updateSelectionInfo();
         this.applyBatchEditState();
+        this.removeNativeTitles(list);
     },
 
     createCard(entry, index) {
@@ -1773,6 +1793,7 @@ const UI = {
 
         document.body.appendChild(overlay);
         this.syncPopupToVisualViewport(overlay);
+        this.removeNativeTitles(overlay);
 
         const keysInput = overlay.querySelector('.wb-popup-input-keys');
         const textarea = overlay.querySelector('.wb-popup-textarea');
@@ -1867,6 +1888,8 @@ const UI = {
 
             container.appendChild(card);
         });
+
+        this.removeNativeTitles(container);
     },
 
     renderStitchView() {
@@ -1878,6 +1901,9 @@ const UI = {
 
         this.renderStitchSide('left');
         this.renderStitchSide('right');
+
+        const stitchView = document.getElementById('wb-view-stitch');
+        if (stitchView) this.removeNativeTitles(stitchView);
     },
 
     renderStitchSide(sideKey) {
@@ -2169,6 +2195,8 @@ const UI = {
         const hide = () => tipEl.classList.remove('show');
 
         document.body.addEventListener('mouseover', (e) => {
+            if (this.isTouchLike()) return;
+
             const container = e.target.closest(`#${CONFIG.id}, .wb-modal-overlay`);
             if (!container) return;
 
@@ -2184,6 +2212,7 @@ const UI = {
         });
 
         document.body.addEventListener('mouseout', hide);
+        document.body.addEventListener('touchstart', hide, { passive: true });
     },
 };
 

@@ -1302,3 +1302,13 @@
         min-width: 118px;
     }
 }
+
+/* 触屏设备禁用提示气泡（与 JS 联动双保险） */
+@media (hover: none), (pointer: coarse) {
+    .wb-tooltip,
+    .wb-tooltip.show {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+    }
+}
