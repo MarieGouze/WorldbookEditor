@@ -1,4 +1,3 @@
-/* style.css */
 :root {
     --wb-bg-main: #fffef8;
     --wb-bg-panel: #fffef5;
@@ -209,36 +208,89 @@
     min-width: 0;
 }
 
+/* Batch toolbar: 3 main icons + popovers */
 #enhanced-wb-panel-v6 .wb-batch-toolbar {
     position: sticky;
     top: 0;
-    z-index: 12;
+    z-index: 16;
     display: flex;
     align-items: center;
     gap: 6px;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     border: 1px solid var(--wb-border);
-    border-radius: 12px;
-    padding: 8px;
-    background: rgba(255, 255, 255, 0.94);
+    border-radius: 10px;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.95);
     backdrop-filter: blur(3px);
     box-shadow: 0 3px 10px rgba(51, 90, 120, 0.08);
+    min-height: 44px;
+    overflow: visible;
 }
 
 #enhanced-wb-panel-v6 #wb-selection-info {
     font-size: 12px;
     font-weight: 800;
     color: #5f7991;
-    margin-right: 4px;
+    margin-right: auto;
+    white-space: nowrap;
 }
 
-#enhanced-wb-panel-v6 .wb-batch-select {
-    min-width: 146px;
+#enhanced-wb-panel-v6 .wb-batch-icon-btn {
+    width: 30px;
+    height: 30px;
+    min-width: 30px;
+    padding: 0;
+    border-radius: 8px;
 }
 
+#enhanced-wb-panel-v6 .wb-batch-icon-btn i {
+    font-size: 13px;
+}
+
+#enhanced-wb-panel-v6 .wb-batch-main-btn.active {
+    box-shadow: 0 0 0 3px rgba(102, 204, 255, 0.22);
+}
+
+#enhanced-wb-panel-v6 .wb-batch-popover {
+    position: absolute;
+    right: 8px;
+    top: calc(100% + 6px);
+    width: max-content;
+    max-width: min(320px, calc(100vw - 28px));
+    border: 1px solid var(--wb-border);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 14px 24px rgba(70, 112, 142, 0.2);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    z-index: 25;
+}
+
+#enhanced-wb-panel-v6 .wb-batch-pop-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 30px);
+    gap: 8px;
+    justify-content: end;
+}
+
+#enhanced-wb-panel-v6 .wb-batch-adv-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+#enhanced-wb-panel-v6 .wb-batch-select,
 #enhanced-wb-panel-v6 .wb-batch-num {
-    width: 116px;
-    text-align: center;
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+}
+
+#enhanced-wb-panel-v6 .wb-batch-adv-apply {
+    flex-shrink: 0;
 }
 
 /* Inputs */
@@ -492,8 +544,7 @@
     border: 1px solid #f5ebc6;
     border-radius: 12px;
     padding: 10px;
-    overflow-y: auto;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-topbar {
@@ -504,6 +555,7 @@
     margin-bottom: 8px;
     flex-wrap: wrap;
     min-width: 0;
+    flex-shrink: 0;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-mode-wrap {
@@ -530,7 +582,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
-    align-content: start;
+    overflow: hidden;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-pane {
@@ -544,6 +596,13 @@
     padding: 8px;
     gap: 8px;
     overflow: hidden;
+    max-height: min(72vh, 760px);
+}
+
+#enhanced-wb-panel-v6 .wb-stitch-pane-head,
+#enhanced-wb-panel-v6 .wb-stitch-pane-tools,
+#enhanced-wb-panel-v6 .wb-stitch-pane-actions {
+    flex-shrink: 0;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-pane-head {
@@ -582,7 +641,7 @@
 
 #enhanced-wb-panel-v6 .wb-stitch-list {
     flex: 1;
-    min-height: 240px;
+    min-height: 200px;
     border: 1px solid var(--wb-border);
     border-radius: 10px;
     background: #fff;
@@ -1051,35 +1110,30 @@
     #enhanced-wb-panel-v6 .wb-bind-grid {
         grid-template-columns: 1fr;
     }
-
-    #enhanced-wb-panel-v6 .wb-batch-toolbar {
-        align-items: flex-start;
-    }
 }
 
-/* 左右拖拽补丁：窄屏强制单列 + 工具栏跟页滚动 */
 @media (max-width: 920px) {
     #enhanced-wb-panel-v6 #wb-view-stitch {
         padding: 8px;
+        overflow: auto;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-grid {
         display: flex;
         flex-direction: column;
         gap: 8px;
+        overflow: visible;
         flex: 0 0 auto;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane {
         width: 100%;
-        overflow: visible;
+        max-height: min(62dvh, 560px);
+        min-height: 420px;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-list {
-        flex: 0 0 auto;
-        min-height: 0;
-        max-height: none;
-        overflow: visible;
+        min-height: 180px;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane-head {
@@ -1173,25 +1227,31 @@
     }
 
     #enhanced-wb-panel-v6 .wb-batch-toolbar {
-        top: 0;
-        padding: 8px;
-        gap: 6px;
+        padding: 6px;
+        gap: 5px;
     }
 
     #enhanced-wb-panel-v6 #wb-selection-info {
-        width: 100%;
-        margin-right: 0;
+        font-size: 11px;
+        max-width: 90px;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
-    #enhanced-wb-panel-v6 .wb-batch-toolbar .wb-btn-rect.mini {
-        flex: 1 1 calc(50% - 6px);
-        text-align: center;
+    #enhanced-wb-panel-v6 .wb-batch-icon-btn {
+        width: 28px;
+        height: 28px;
+        min-width: 28px;
     }
 
-    #enhanced-wb-panel-v6 .wb-batch-select,
-    #enhanced-wb-panel-v6 .wb-batch-num {
-        flex: 1 1 100%;
-        width: 100%;
+    #enhanced-wb-panel-v6 .wb-batch-popover {
+        right: 4px;
+        max-width: min(300px, calc(100vw - 20px));
+    }
+
+    #enhanced-wb-panel-v6 .wb-batch-pop-grid {
+        grid-template-columns: repeat(4, 28px);
+        gap: 6px;
     }
 
     #enhanced-wb-panel-v6 .wb-row {
