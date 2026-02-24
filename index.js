@@ -31,6 +31,11 @@ const STATE = {
         chat: null,
     },
     debouncer: null,
+    stitch: {
+        mode: 'copy',
+        left: { book: null, entries: [], selected: new Set(), search: '' },
+        right: { book: null, entries: [], selected: new Set(), search: '' },
+    },
 };
 
 const WI_POSITION_MAP = {
@@ -167,7 +172,6 @@ async function setCharBindings(type, worldName, isEnabled) {
             ? `/world silent=true "${worldName}"`
             : `/world state=off silent=true "${worldName}"`;
         await context.executeSlashCommands(command);
-        return;
     }
 }
 
@@ -413,6 +417,7 @@ const Actions = {
             UI.renderPresetBar();
 
             if (STATE.currentView === 'manage') UI.renderManageView();
+            if (STATE.currentView === 'stitch') UI.renderStitchView();
         } catch (_e) {
             // noop
         }
@@ -430,26 +435,22 @@ const Actions = {
         STATE.currentBookName = name;
         STATE.selectedUids.clear();
 
-        try {
-            const loadedEntries = await API.loadBook(name);
-            if (STATE.currentBookName !== name) return;
+        const loadedEntries = await API.loadBook(name);
+        if (STATE.currentBookName !== name) return;
 
-            STATE.entries = loadedEntries;
-            STATE.entries.sort((a, b) => {
-                const scoreA = this.getEntrySortScore(a);
-                const scoreB = this.getEntrySortScore(b);
-                if (scoreA !== scoreB) return scoreB - scoreA;
-                return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
-            });
+        STATE.entries = loadedEntries;
+        STATE.entries.sort((a, b) => {
+            const scoreA = this.getEntrySortScore(a);
+            const scoreB = this.getEntrySortScore(b);
+            if (scoreA !== scoreB) return scoreB - scoreA;
+            return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
+        });
 
-            UI.renderBookSelector();
-            UI.renderPresetBar();
-            UI.renderGlobalStats();
-            UI.renderList(STATE.editorSearch || '');
-            UI.updateSelectionInfo();
-        } catch (_e) {
-            toastr.error(`无法加载世界书 "${name}"`);
-        }
+        UI.renderBookSelector();
+        UI.renderPresetBar();
+        UI.renderGlobalStats();
+        UI.renderList(STATE.editorSearch || '');
+        UI.updateSelectionInfo();
     },
 
     updateEntry(uid, updater) {
@@ -858,6 +859,118 @@ const Actions = {
         await this.refreshAllContext();
         await this.loadBook(newName);
     },
+
+    stitchSide(side) {
+        return side === 'left' ? STATE.stitch.left : STATE.stitch.right;
+    },
+
+    otherSide(side) {
+        return side === 'left' ? 'right' : 'left';
+    },
+
+    async ensureStitchBooks() {
+        const all = STATE.allBookNames;
+        if (!all.length) return;
+
+        if (!STATE.stitch.left.book || !all.includes(STATE.stitch.left.book)) {
+            STATE.stitch.left.book = (STATE.currentBookName && all.includes(STATE.currentBookName))
+                ? STATE.currentBookName
+                : all[0];
+        }
+
+        if (!STATE.stitch.right.book || !all.includes(STATE.stitch.right.book)) {
+            const candidate = all.find((n) => n !== STATE.stitch.left.book);
+            STATE.stitch.right.book = candidate || STATE.stitch.left.book;
+        }
+
+        await Promise.all([
+            this.stitchLoadSide('left', STATE.stitch.left.book, true),
+            this.stitchLoadSide('right', STATE.stitch.right.book, true),
+        ]);
+    },
+
+    async stitchLoadSide(side, bookName, force = false) {
+        const target = this.stitchSide(side);
+        if (!bookName) return;
+
+        if (!force && target.book === bookName && target.entries.length) return;
+
+        target.book = bookName;
+        target.entries = await API.loadBook(bookName);
+        target.selected = new Set();
+    },
+
+    getNextUid(entries) {
+        return entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
+    },
+
+    normalizeOrders(entries) {
+        entries.forEach((e, idx) => {
+            e.order = idx;
+        });
+    },
+
+    async stitchTransfer(fromSide, toSide, uidList, mode) {
+        const source = this.stitchSide(fromSide);
+        const target = this.stitchSide(toSide);
+
+        if (!source.book || !target.book) return;
+        if (source.book === target.book) {
+            toastr.warning('左右是同一本世界书，无法跨书缝合');
+            return;
+        }
+
+        const sourceMap = new Map(source.entries.map((e) => [Number(e.uid), e]));
+        const movedUids = [];
+
+        uidList.forEach((uid) => {
+            const item = sourceMap.get(Number(uid));
+            if (!item) return;
+
+            const cloned = cloneData(item);
+            cloned.uid = this.getNextUid(target.entries);
+            target.entries.push(cloned);
+
+            if (mode === 'move') movedUids.push(Number(uid));
+        });
+
+        if (mode === 'move' && movedUids.length) {
+            source.entries = source.entries.filter((e) => !movedUids.includes(Number(e.uid)));
+            movedUids.forEach((uid) => source.selected.delete(uid));
+        }
+
+        this.normalizeOrders(source.entries);
+        this.normalizeOrders(target.entries);
+
+        await API.saveBookEntries(source.book, source.entries);
+        await API.saveBookEntries(target.book, target.entries);
+
+        if (STATE.currentBookName === source.book) {
+            STATE.entries = cloneData(source.entries);
+        } else if (STATE.currentBookName === target.book) {
+            STATE.entries = cloneData(target.entries);
+        }
+
+        if (STATE.currentView === 'editor') {
+            UI.renderList(STATE.editorSearch);
+            UI.renderGlobalStats();
+        }
+    },
+
+    async stitchTransferSelected(fromSide, mode) {
+        const source = this.stitchSide(fromSide);
+        const targetSide = this.otherSide(fromSide);
+        const selected = Array.from(source.selected);
+
+        if (!selected.length) {
+            toastr.warning('请先勾选条目');
+            return;
+        }
+
+        await this.stitchTransfer(fromSide, targetSide, selected, mode);
+        UI.renderStitchView();
+        toastr.success(mode === 'move' ? '已移动' : '已复制');
+    },
 };
 
 const UI = {
@@ -900,6 +1013,7 @@ const UI = {
             <div class="wb-header-bar">
                 <div class="wb-tabs">
                     <div class="wb-tab active" data-tab="editor"><i class="fa-solid fa-pen-to-square"></i> 编辑世界书</div>
+                    <div class="wb-tab" data-tab="stitch"><i class="fa-solid fa-table-columns"></i> 缝合世界书</div>
                     <div class="wb-tab" data-tab="binding"><i class="fa-solid fa-link"></i> 绑定世界书</div>
                     <div class="wb-tab" data-tab="manage"><i class="fa-solid fa-list-check"></i> 管理世界书</div>
                 </div>
@@ -965,6 +1079,57 @@ const UI = {
                     </div>
 
                     <div class="wb-list" id="wb-entry-list"></div>
+                </div>
+
+                <div id="wb-view-stitch" class="wb-view-section wb-hidden">
+                    <div class="wb-stitch-topbar">
+                        <div class="wb-stitch-mode-wrap">
+                            <span>拖拽模式</span>
+                            <select id="wb-stitch-mode">
+                                <option value="copy">复制</option>
+                                <option value="move">移动</option>
+                            </select>
+                        </div>
+                        <div class="wb-stitch-hint">把条目拖到另一侧列表即可跨书缝合；移动端可用下方“复制/移动选中”按钮。</div>
+                    </div>
+
+                    <div class="wb-stitch-grid">
+                        <div class="wb-stitch-pane" id="wb-stitch-left-pane">
+                            <div class="wb-stitch-pane-head">
+                                <div class="wb-stitch-pane-title">左侧世界书</div>
+                                <select id="wb-stitch-left-book"></select>
+                            </div>
+                            <div class="wb-stitch-pane-tools">
+                                <input class="wb-input-dark" id="wb-stitch-left-search" placeholder="搜索左侧条目...">
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-all">全选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-invert">反选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-clear">清空</button>
+                            </div>
+                            <div class="wb-stitch-list" id="wb-stitch-left-list" data-side="left"></div>
+                            <div class="wb-stitch-pane-actions">
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-copy">复制选中到右侧</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-move">移动选中到右侧</button>
+                            </div>
+                        </div>
+
+                        <div class="wb-stitch-pane" id="wb-stitch-right-pane">
+                            <div class="wb-stitch-pane-head">
+                                <div class="wb-stitch-pane-title">右侧世界书</div>
+                                <select id="wb-stitch-right-book"></select>
+                            </div>
+                            <div class="wb-stitch-pane-tools">
+                                <input class="wb-input-dark" id="wb-stitch-right-search" placeholder="搜索右侧条目...">
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-all">全选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-invert">反选</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-clear">清空</button>
+                            </div>
+                            <div class="wb-stitch-list" id="wb-stitch-right-list" data-side="right"></div>
+                            <div class="wb-stitch-pane-actions">
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-copy">复制选中到左侧</button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-move">移动选中到左侧</button>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div id="wb-view-binding" class="wb-view-section wb-hidden">
@@ -1100,6 +1265,8 @@ const UI = {
             this.renderBindingView();
         } else if (viewName === 'manage') {
             this.renderManageView();
+        } else if (viewName === 'stitch') {
+            Actions.ensureStitchBooks().then(() => this.renderStitchView());
         } else {
             this.renderBookSelector();
             this.renderPresetBar();
@@ -1588,6 +1755,164 @@ const UI = {
 
             container.appendChild(card);
         });
+    },
+
+    renderStitchView() {
+        const modeEl = document.getElementById('wb-stitch-mode');
+        if (modeEl) {
+            modeEl.value = STATE.stitch.mode;
+            modeEl.onchange = (e) => { STATE.stitch.mode = e.target.value; };
+        }
+
+        this.renderStitchSide('left');
+        this.renderStitchSide('right');
+    },
+
+    renderStitchSide(sideKey) {
+        const side = sideKey === 'left' ? STATE.stitch.left : STATE.stitch.right;
+        const all = STATE.allBookNames;
+
+        const bookSel = document.getElementById(`wb-stitch-${sideKey}-book`);
+        const searchInp = document.getElementById(`wb-stitch-${sideKey}-search`);
+        const listEl = document.getElementById(`wb-stitch-${sideKey}-list`);
+        const btnAll = document.getElementById(`wb-stitch-${sideKey}-all`);
+        const btnInvert = document.getElementById(`wb-stitch-${sideKey}-invert`);
+        const btnClear = document.getElementById(`wb-stitch-${sideKey}-clear`);
+        const btnCopy = document.getElementById(`wb-stitch-${sideKey}-copy`);
+        const btnMove = document.getElementById(`wb-stitch-${sideKey}-move`);
+
+        if (!bookSel || !searchInp || !listEl) return;
+
+        if (!all.length) {
+            listEl.innerHTML = '<div class="wb-stitch-empty">暂无世界书</div>';
+            return;
+        }
+
+        let options = '';
+        all.forEach((name) => {
+            const selected = name === side.book ? 'selected' : '';
+            options += `<option value="${esc(name)}" ${selected}>${esc(name)}</option>`;
+        });
+        bookSel.innerHTML = options;
+
+        bookSel.onchange = async (e) => {
+            await Actions.stitchLoadSide(sideKey, e.target.value, true);
+            this.renderStitchView();
+        };
+
+        searchInp.value = side.search || '';
+        searchInp.oninput = (e) => {
+            side.search = e.target.value || '';
+            this.renderStitchSide(sideKey);
+        };
+
+        if (btnAll) {
+            btnAll.onclick = () => {
+                const filtered = side.entries.filter((entry) => {
+                    const t = side.search.toLowerCase();
+                    return !t || String(entry.comment || '').toLowerCase().includes(t);
+                });
+                filtered.forEach((e) => side.selected.add(Number(e.uid)));
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnInvert) {
+            btnInvert.onclick = () => {
+                const filtered = side.entries.filter((entry) => {
+                    const t = side.search.toLowerCase();
+                    return !t || String(entry.comment || '').toLowerCase().includes(t);
+                });
+                filtered.forEach((e) => {
+                    const uid = Number(e.uid);
+                    if (side.selected.has(uid)) side.selected.delete(uid);
+                    else side.selected.add(uid);
+                });
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnClear) {
+            btnClear.onclick = () => {
+                side.selected.clear();
+                this.renderStitchSide(sideKey);
+            };
+        }
+
+        if (btnCopy) btnCopy.onclick = () => Actions.stitchTransferSelected(sideKey, 'copy');
+        if (btnMove) btnMove.onclick = () => Actions.stitchTransferSelected(sideKey, 'move');
+
+        const term = side.search.toLowerCase();
+        const filteredEntries = side.entries.filter((entry) => !term || String(entry.comment || '').toLowerCase().includes(term));
+
+        if (!filteredEntries.length) {
+            listEl.innerHTML = '<div class="wb-stitch-empty">无匹配条目</div>';
+        } else {
+            listEl.innerHTML = filteredEntries.map((entry) => {
+                const selected = side.selected.has(Number(entry.uid)) ? 'checked' : '';
+                const modeClass = entry.constant ? 'mode-blue' : 'mode-green';
+                const mode = entry.constant ? '常驻' : '非常驻';
+                const enabledText = entry.disable ? '关闭' : '启用';
+                return `
+                    <div class="wb-stitch-item" draggable="true" data-side="${sideKey}" data-uid="${entry.uid}">
+                        <input type="checkbox" class="wb-stitch-check" data-uid="${entry.uid}" ${selected}>
+                        <div class="wb-stitch-item-main">
+                            <div class="wb-stitch-item-title">${esc(entry.comment || `条目 ${entry.uid}`)}</div>
+                            <div class="wb-stitch-item-meta">
+                                <span class="${modeClass}">${mode}</span>
+                                <span>${enabledText}</span>
+                                <span>@${esc(WI_POSITION_MAP[entry.position] || entry.position)}</span>
+                                <span>uid:${entry.uid}</span>
+                            </div>
+                        </div>
+                        <i class="fa-solid fa-grip-lines wb-stitch-grip"></i>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        listEl.querySelectorAll('.wb-stitch-check').forEach((cb) => {
+            cb.onchange = (e) => {
+                const uid = Number(e.target.dataset.uid);
+                if (e.target.checked) side.selected.add(uid);
+                else side.selected.delete(uid);
+            };
+        });
+
+        listEl.querySelectorAll('.wb-stitch-item').forEach((item) => {
+            item.addEventListener('dragstart', (e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/uid', item.dataset.uid);
+                e.dataTransfer.setData('text/from-side', sideKey);
+            });
+        });
+
+        listEl.ondragover = (e) => {
+            e.preventDefault();
+            listEl.classList.add('drag-over');
+        };
+
+        listEl.ondragleave = () => {
+            listEl.classList.remove('drag-over');
+        };
+
+        listEl.ondrop = async (e) => {
+            e.preventDefault();
+            listEl.classList.remove('drag-over');
+
+            const uid = Number(e.dataTransfer.getData('text/uid'));
+            const fromSide = e.dataTransfer.getData('text/from-side');
+            if (!uid || !fromSide || fromSide === sideKey) return;
+
+            await Actions.stitchTransfer(fromSide, sideKey, [uid], STATE.stitch.mode);
+            this.renderStitchView();
+            toastr.success(STATE.stitch.mode === 'move' ? '已移动' : '已复制');
+        };
+
+        const pane = document.getElementById(`wb-stitch-${sideKey}-pane`);
+        if (pane) {
+            pane.querySelector('.wb-stitch-pane-title').textContent = `${sideKey === 'left' ? '左侧' : '右侧'}世界书（已选 ${side.selected.size}/${side.entries.length}）`;
+        }
     },
 
     applyCustomDropdown(selectId) {
