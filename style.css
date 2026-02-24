@@ -492,6 +492,7 @@
     border: 1px solid #f5ebc6;
     border-radius: 12px;
     padding: 10px;
+    overflow-y: auto;
     overflow-x: hidden;
 }
 
@@ -499,8 +500,8 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 10px;
+    gap: 10px;
+    margin-bottom: 8px;
     flex-wrap: wrap;
     min-width: 0;
 }
@@ -529,6 +530,7 @@
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 10px;
+    align-content: start;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-pane {
@@ -633,9 +635,11 @@
     font-size: 13px;
     font-weight: 700;
     color: #45627d;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+    word-break: break-word;
+    line-height: 1.35;
 }
 
 #enhanced-wb-panel-v6 .wb-stitch-item-meta {
@@ -1053,7 +1057,7 @@
     }
 }
 
-/* 左右拖拽补丁：窄屏强制单列 + 收口，杜绝整页横向溢出 */
+/* 左右拖拽补丁：窄屏强制单列 + 工具栏跟页滚动 */
 @media (max-width: 920px) {
     #enhanced-wb-panel-v6 #wb-view-stitch {
         padding: 8px;
@@ -1063,14 +1067,19 @@
         display: flex;
         flex-direction: column;
         gap: 8px;
+        flex: 0 0 auto;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane {
         width: 100%;
+        overflow: visible;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-list {
-        min-height: 180px;
+        flex: 0 0 auto;
+        min-height: 0;
+        max-height: none;
+        overflow: visible;
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane-head {
@@ -1203,7 +1212,7 @@
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane-tools .wb-btn-rect.mini {
-        flex: 1 1 calc(50% - 6px);
+        flex: 1 1 calc(33.333% - 6px);
     }
 
     #enhanced-wb-panel-v6 .wb-stitch-pane-actions .wb-btn-rect.mini {
