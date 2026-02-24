@@ -22,6 +22,10 @@
     position: fixed;
     inset: 0;
     z-index: 20000;
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     background:
         radial-gradient(1400px 500px at 12% -20%, rgba(255, 255, 255, 0.45), transparent 65%),
         radial-gradient(1000px 420px at 95% -10%, rgba(255, 255, 255, 0.3), transparent 65%),
@@ -40,6 +44,12 @@
     display: none !important;
 }
 
+#enhanced-wb-panel-v6,
+#enhanced-wb-panel-v6 .wb-content,
+#enhanced-wb-panel-v6 .wb-view-section {
+    overflow-x: hidden;
+}
+
 /* Header */
 .wb-header-bar {
     height: 58px;
@@ -50,6 +60,7 @@
     justify-content: center;
     position: relative;
     backdrop-filter: blur(3px);
+    flex-shrink: 0;
 }
 
 .wb-tabs {
@@ -59,9 +70,18 @@
     border-radius: 999px;
     border: 1px solid var(--wb-border);
     background: rgba(255, 255, 255, 0.8);
+    max-width: calc(100% - 64px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+}
+
+.wb-tabs::-webkit-scrollbar {
+    display: none;
 }
 
 .wb-tab {
+    flex: 0 0 auto;
     border-radius: 999px;
     padding: 8px 14px;
     font-size: 14px;
@@ -70,6 +90,7 @@
     cursor: pointer;
     user-select: none;
     transition: 0.15s;
+    white-space: nowrap;
 }
 
 .wb-tab i {
@@ -108,7 +129,7 @@
     margin: 0 auto;
     flex: 1;
     min-height: 0;
-    padding: 10px 10px 14px;
+    padding: 10px 10px calc(14px + env(safe-area-inset-bottom));
     display: flex;
     flex-direction: column;
 }
@@ -128,10 +149,22 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: nowrap;
+}
+
+.wb-book-bar > * {
+    flex-shrink: 0;
+}
+
+.wb-book-bar #wb-book-selector,
+.wb-book-bar #wb-trigger-wb-book-selector {
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .wb-tool-bar .wb-input-dark {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .wb-stat-line {
@@ -175,7 +208,6 @@
     background: rgba(255, 255, 255, 0.88);
 }
 
-/* 顶部固定批量栏 */
 .wb-batch-toolbar {
     position: sticky;
     top: 0;
@@ -189,6 +221,7 @@
     padding: 8px;
     background: rgba(255, 255, 255, 0.94);
     backdrop-filter: blur(3px);
+    box-shadow: 0 3px 10px rgba(51, 90, 120, 0.08);
 }
 
 #wb-selection-info {
@@ -287,7 +320,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    padding-bottom: 16px;
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
 }
 
 .wb-empty {
@@ -357,7 +390,6 @@
     width: 100%;
 }
 
-/* 默认隐藏点选，仅批量编辑模式显示 */
 #enhanced-wb-panel-v6 .wb-select-dot {
     display: none;
 }
@@ -872,6 +904,7 @@
     align-items: center;
     justify-content: center;
     background: rgba(27, 45, 60, 0.5);
+    padding: 12px;
 }
 
 .wb-content-popup {
@@ -1041,9 +1074,27 @@
 }
 
 @media (max-width: 760px) {
+    #enhanced-wb-panel-v6 {
+        height: 100dvh;
+    }
+
+    .wb-header-bar {
+        height: 56px;
+        padding-top: env(safe-area-inset-top);
+    }
+
+    .wb-header-close {
+        right: 10px;
+        top: 12px;
+    }
+
     .wb-content {
         width: 100vw;
-        padding: 8px;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+    }
+
+    .wb-tabs {
+        max-width: calc(100vw - 54px);
     }
 
     .wb-tab {
@@ -1052,16 +1103,60 @@
     }
 
     .wb-tab i {
-        margin-right: 4px;
+        display: none;
     }
 
     .wb-book-bar,
     .wb-tool-bar,
-    .wb-preset-strip,
-    .wb-batch-toolbar,
     .wb-stitch-pane-tools,
     .wb-stitch-pane-actions {
         flex-wrap: wrap;
+        gap: 6px;
+    }
+
+    .wb-book-bar #wb-book-selector,
+    .wb-book-bar #wb-trigger-wb-book-selector {
+        order: -1;
+        flex: 1 1 100%;
+    }
+
+    .wb-preset-strip {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+    }
+
+    .wb-preset-strip #wb-preset-selector,
+    .wb-preset-strip #wb-trigger-wb-preset-selector {
+        grid-column: 1 / -1;
+        min-width: 0;
+    }
+
+    .wb-tool-bar #wb-search-entry {
+        order: -1;
+        flex: 1 1 100%;
+    }
+
+    .wb-batch-toolbar {
+        top: 0;
+        padding: 8px;
+        gap: 6px;
+    }
+
+    #wb-selection-info {
+        width: 100%;
+        margin-right: 0;
+    }
+
+    .wb-batch-toolbar .wb-btn-rect.mini {
+        flex: 1 1 calc(50% - 6px);
+        text-align: center;
+    }
+
+    .wb-batch-select,
+    .wb-batch-num {
+        flex: 1 1 100%;
+        width: 100%;
     }
 
     .wb-row {
@@ -1074,11 +1169,10 @@
 
     .wb-pos-wrapper .inp-pos {
         flex: 1;
-        min-width: 180px;
+        min-width: 170px;
     }
 
-    .wb-batch-select,
-    .wb-batch-num {
-        width: 100%;
+    .wb-token-display {
+        margin-left: 0;
     }
 }

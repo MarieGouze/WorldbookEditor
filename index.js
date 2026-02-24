@@ -1303,10 +1303,16 @@ const UI = {
         STATE.batchEditMode = next;
         this.applyBatchEditState();
 
+        const bar = document.getElementById('wb-batch-toolbar');
+
         if (!next) {
             Actions.clearSelection();
         } else {
             this.updateSelectionInfo();
+            const isMobile = window.matchMedia('(max-width: 760px), (pointer: coarse)').matches;
+            if (isMobile && bar) {
+                bar.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            }
         }
     },
 
