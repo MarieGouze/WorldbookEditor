@@ -1,4 +1,21 @@
 :root {
+    /* === 全局样式隔离保护 (防止污染酒馆主页) === */
+#enhanced-wb-panel-v6 *,
+.wb-modal-overlay *,
+.wb-gr-dropdown *,
+.wb-tooltip {
+    box-sizing: border-box;
+}
+
+/* 强制所有图标颜色继承，防止被网页主题覆盖或污染网页 */
+#enhanced-wb-panel-v6 i,
+.wb-modal-overlay i,
+.wb-sort-modal-overlay i,
+.wb-warning-modal i {
+    color: inherit !important;
+    -webkit-text-fill-color: inherit !important;
+    background-image: none !important;
+}
     --wb-bg-main: #fffef8;
     --wb-bg-panel: #fffef5;
     --wb-bg-card: #ffffff;
@@ -147,7 +164,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: wrap; /* 允许搜索框和按钮自然换行，防止重叠 */
+    flex-wrap: nowrap;
     min-width: 0;
 }
 
@@ -366,15 +383,62 @@
 #enhanced-wb-panel-v6 .wb-card.type-green { border-left: 5px solid var(--wb-nonconst-green); }
 #enhanced-wb-panel-v6 .wb-card.disabled { opacity: 0.65; }
 
-#enhanced-wb-panel-v6 .wb-card-header { padding: 10px; }
-#enhanced-wb-panel-v6 .wb-card-main { display: flex; flex-direction: column; gap: 8px; }
+/* --- 核心修复：还原旧版卡片响应式排版 --- */
+#enhanced-wb-panel-v6 .wb-card-header {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 10px;
+    gap: 8px 10px;
+    background: #fff;
+    align-items: center;
+}
 
-#enhanced-wb-panel-v6 .wb-row {
+/* 强制换行占位元素：分隔移动端第一行和第二行 */
+#enhanced-wb-panel-v6 .wb-card-header::after {
+    content: "";
+    flex-basis: 100%;
+    order: 2;
+    height: 0;
+    margin: 0;
+}
+
+#enhanced-wb-panel-v6 .wb-header-item {
     display: flex;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    min-width: 0;
+    gap: 6px;
+}
+
+/* ====== 移动端两行布局 ====== */
+#enhanced-wb-panel-v6 .wb-item-title { order: 1; flex: 1 1 0%; min-width: 100px; }
+#enhanced-wb-panel-v6 .wb-title-wrapper { display: flex; align-items: center; gap: 6px; width: 100%; }
+#enhanced-wb-panel-v6 .wb-item-actions { order: 1; flex: 0 0 auto; }
+
+#enhanced-wb-panel-v6 .wb-item-enable { order: 3; flex: 0 0 auto; }
+#enhanced-wb-panel-v6 .wb-item-type { order: 4; flex: 0 0 auto; }
+#enhanced-wb-panel-v6 .wb-item-pos-order { order: 5; flex: 1 1 auto; min-width: 0; }
+#enhanced-wb-panel-v6 .wb-item-token { order: 6; flex: 0 0 auto; margin-left: auto; }
+
+/* 移动端专属：解除位置选择器和顺序输入框的硬宽度限制，使其自适应变窄 */
+@media (max-width: 767px) {
+    #enhanced-wb-panel-v6 .wb-pos-wrapper {
+        width: auto !important;
+        min-width: 80px !important;
+        flex: 1 1 auto !important;
+    }
+    #enhanced-wb-panel-v6 .inp-order { width: 55px !important; }
+}
+
+/* ====== 电脑端单行布局（≥768px） ====== */
+@media (min-width: 768px) {
+    #enhanced-wb-panel-v6 .wb-card-header { flex-wrap: nowrap; }
+    #enhanced-wb-panel-v6 .wb-card-header::after { display: none; }
+
+    #enhanced-wb-panel-v6 .wb-item-enable { order: 1; flex: 0 0 auto; }
+    #enhanced-wb-panel-v6 .wb-item-type { order: 2; flex: 0 0 auto; }
+    #enhanced-wb-panel-v6 .wb-item-title { order: 3; flex: 1 1 auto; min-width: 150px; }
+    #enhanced-wb-panel-v6 .wb-item-pos-order { order: 4; flex: 0 0 auto; }
+    #enhanced-wb-panel-v6 .wb-item-token { order: 5; flex: 0 0 auto; margin-left: 0; }
+    #enhanced-wb-panel-v6 .wb-item-actions { order: 6; flex: 0 0 auto; }
 }
 
 #enhanced-wb-panel-v6 .wb-select-dot { display: none; }
@@ -684,8 +748,7 @@
 #enhanced-wb-panel-v6 .wb-bind-grid {
     display: grid;
     gap: 10px;
-    /* 自动适应屏幕宽度，手机端会自动变成单列上下排列 */
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     min-width: 0;
 }
 
@@ -1462,34 +1525,3 @@
 [data-theme='dark'] .wb-export-card { background-color: #2b2b2b !important; border-color: #404040 !important; color: #e5e7eb !important; }
 [data-theme='dark'] .wb-export-title { color: #f3f4f6 !important; }
 [data-theme='dark'] .wb-export-btn { background-color: #333333; border-color: #404040; color: #d1d5db; }
-/* ======== 移动端与重叠修复补充代码 ======== */
-
-/* 修复菜单弹出层被遮挡或超出屏幕边界 */
-.wb-menu-dropdown {
-    z-index: 30000 !important;
-    max-width: 90vw;
-    white-space: normal;
-}
-
-/* 优化“缝合世界书”页面的移动端适配，提前变为上下排布 */
-@media (max-width: 1000px) {
-    #enhanced-wb-panel-v6 .wb-stitch-grid {
-        display: flex !important;
-        flex-direction: column !important;
-    }
-    #enhanced-wb-panel-v6 .wb-stitch-pane {
-        width: 100% !important;
-    }
-}
-
-/* 保证状态统计栏和批量操作栏在小屏幕上正常折叠 */
-@media (max-width: 760px) {
-    #enhanced-wb-panel-v6 .wb-stat-line {
-        flex-wrap: wrap;
-        justify-content: flex-start;
-    }
-    .wb-batch-toolbar {
-        flex-direction: column !important;
-        align-items: stretch !important;
-    }
-}
