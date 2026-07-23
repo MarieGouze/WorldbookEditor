@@ -1,7 +1,7 @@
-:root {
-    /* === 全局样式隔离保护 (防止污染酒馆主页) === */
+/* === 全局样式隔离保护 (防止污染酒馆主页) === */
 #enhanced-wb-panel-v6 *,
 .wb-modal-overlay *,
+.wb-sort-modal-overlay *,
 .wb-gr-dropdown *,
 .wb-tooltip {
     box-sizing: border-box;
@@ -16,6 +16,8 @@
     -webkit-text-fill-color: inherit !important;
     background-image: none !important;
 }
+
+:root {
     --wb-bg-main: #fffef8;
     --wb-bg-panel: #fffef5;
     --wb-bg-card: #ffffff;
@@ -164,7 +166,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap; /* 允许换行，防止重叠 */
     min-width: 0;
 }
 
@@ -1525,3 +1527,14 @@
 [data-theme='dark'] .wb-export-card { background-color: #2b2b2b !important; border-color: #404040 !important; color: #e5e7eb !important; }
 [data-theme='dark'] .wb-export-title { color: #f3f4f6 !important; }
 [data-theme='dark'] .wb-export-btn { background-color: #333333; border-color: #404040; color: #d1d5db; }
+/* ====== 底部信息与头像尺寸约束 ====== */
+#enhanced-wb-panel-v6 .wb-footer-info {
+    text-align: center; color: #6b7280; font-size: 0.9em; line-height: 1.6;
+    position: absolute; bottom: 60px; left: 0; width: 100%;
+    background: rgba(255, 255, 255, 0.95); z-index: 10;
+}
+#enhanced-wb-panel-v6 .wb-footer-avatar {
+    width: 24px; height: 24px; border-radius: 50%;
+    vertical-align: middle; margin: 0 5px; object-fit: cover;
+    border: 1px solid #ddd; display: inline-block;
+}
