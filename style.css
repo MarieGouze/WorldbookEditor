@@ -147,7 +147,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    flex-wrap: nowrap;
+    flex-wrap: wrap; /* 允许搜索框和按钮自然换行，防止重叠 */
     min-width: 0;
 }
 
@@ -392,15 +392,34 @@
     cursor: help;
 }
 
+/* 扩大按钮点击热区，方便触屏操作 */
 #enhanced-wb-panel-v6 .btn-preview,
-#enhanced-wb-panel-v6 .btn-delete {
-    width: 26px;
-    height: 26px;
-    border-radius: 7px;
+#enhanced-wb-panel-v6 .btn-delete,
+#enhanced-wb-panel-v6 .btn-adv-toggle {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
     display: grid;
     place-items: center;
     cursor: pointer;
     color: #6e88a0;
+    font-size: 1.1em;
+    margin-left: 2px !important;
+}
+
+#enhanced-wb-panel-v6 .btn-adv-toggle:hover {
+    background: rgba(124, 92, 189, 0.15);
+    color: #7c5cbd !important;
+}
+
+/* 优化拖拽把手在移动端的响应范围 */
+#enhanced-wb-panel-v6 .wb-sort-handle {
+    padding: 10px;
+    margin: -10px;
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 #enhanced-wb-panel-v6 .btn-preview:hover {
@@ -665,7 +684,8 @@
 #enhanced-wb-panel-v6 .wb-bind-grid {
     display: grid;
     gap: 10px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    /* 自动适应屏幕宽度，手机端会自动变成单列上下排列 */
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
     min-width: 0;
 }
 
@@ -1442,4 +1462,34 @@
 [data-theme='dark'] .wb-export-card { background-color: #2b2b2b !important; border-color: #404040 !important; color: #e5e7eb !important; }
 [data-theme='dark'] .wb-export-title { color: #f3f4f6 !important; }
 [data-theme='dark'] .wb-export-btn { background-color: #333333; border-color: #404040; color: #d1d5db; }
-[data-theme='dark'] .wb-export-btn:hover { background-color: #3b82f6; border-color: #60a5fa; color: #ffffff; }
+/* ======== 移动端与重叠修复补充代码 ======== */
+
+/* 修复菜单弹出层被遮挡或超出屏幕边界 */
+.wb-menu-dropdown {
+    z-index: 30000 !important;
+    max-width: 90vw;
+    white-space: normal;
+}
+
+/* 优化“缝合世界书”页面的移动端适配，提前变为上下排布 */
+@media (max-width: 1000px) {
+    #enhanced-wb-panel-v6 .wb-stitch-grid {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    #enhanced-wb-panel-v6 .wb-stitch-pane {
+        width: 100% !important;
+    }
+}
+
+/* 保证状态统计栏和批量操作栏在小屏幕上正常折叠 */
+@media (max-width: 760px) {
+    #enhanced-wb-panel-v6 .wb-stat-line {
+        flex-wrap: wrap;
+        justify-content: flex-start;
+    }
+    .wb-batch-toolbar {
+        flex-direction: column !important;
+        align-items: stretch !important;
+    }
+}
