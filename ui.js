@@ -247,14 +247,7 @@ export const UI = {
                         <button class="wb-btn-rect mini" id="wb-batch-order-apply" style="padding:4px 8px; font-size:0.85em; margin-right:10px;">应用顺序</button>
 
                         <input type="number" min="0" id="wb-batch-depth" class="wb-input-dark" placeholder="深度" style="width:60px; padding:4px; font-size:0.85em;">
-                        <button class="wb-btn-rect mini" id="wb-batch-depth-apply" style="padding:4px 8px; font-size:0.85em; margin-right:10px;">应用深度</button>
-
-                        <div style="display:flex; gap:4px; align-items:center; border-left:1px solid rgba(0,0,0,0.1); padding-left:10px; margin-top:4px; width:100%;">
-                            <input type="text" id="wb-batch-find" class="wb-input-dark" placeholder="查找内容" style="width:120px; padding:4px; font-size:0.85em;">
-                            <input type="text" id="wb-batch-replace" class="wb-input-dark" placeholder="替换为..." style="width:120px; padding:4px; font-size:0.85em;">
-                            <label style="font-size:0.8em; cursor:pointer; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="wb-batch-regex"> 正则</label>
-                            <button class="wb-btn-rect mini" id="wb-batch-replace-apply" style="padding:4px 8px; font-size:0.85em; margin-left:6px;">执行替换</button>
-                        </div>
+                        <button class="wb-btn-rect mini" id="wb-batch-depth-apply" style="padding:4px 8px; font-size:0.85em;">应用深度</button>
                     </div>
                     <div class="wb-list" id="wb-entry-list"></div>
                 </div>
@@ -274,12 +267,11 @@ export const UI = {
                                 <div class="wb-stitch-pane-title" style="font-weight:bold; color:#374151; white-space:nowrap;">左侧世界书</div>
                                 <select id="wb-stitch-left-book" class="wb-input-dark" style="flex:1;"></select>
                             </div>
-                            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                                <input class="wb-input-dark" id="wb-stitch-left-search" placeholder="搜索左侧..." style="flex:1; min-width:80px;">
-                                <select id="wb-stitch-left-filter" class="wb-input-dark" style="padding:4px; font-size:0.85em;"><option value="all">全部</option><option value="enabled">仅启用</option></select>
+                            <div style="display:flex; gap:6px;">
+                                <input class="wb-input-dark" id="wb-stitch-left-search" placeholder="搜索左侧..." style="flex:1;">
                                 <button class="wb-btn-rect mini" id="wb-stitch-left-all" style="padding:4px 8px;">全选</button>
                                 <button class="wb-btn-rect mini" id="wb-stitch-left-invert" style="padding:4px 8px;">反选</button>
-                                <button class="wb-btn-rect mini wb-btn-danger" id="wb-stitch-left-del" style="padding:4px 8px;" title="删除选中"><i class="fa-solid fa-trash"></i></button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-left-clear" style="padding:4px 8px;">清空</button>
                             </div>
                             <div class="wb-stitch-list" id="wb-stitch-left-list" data-side="left" style="flex:1; min-height:300px; border:1px solid #f3f4f6; border-radius:8px; overflow-y:auto; padding:5px;"></div>
                             <div style="display:flex; gap:10px; justify-content:center;">
@@ -293,12 +285,11 @@ export const UI = {
                                 <div class="wb-stitch-pane-title" style="font-weight:bold; color:#374151; white-space:nowrap;">右侧世界书</div>
                                 <select id="wb-stitch-right-book" class="wb-input-dark" style="flex:1;"></select>
                             </div>
-                            <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                                <input class="wb-input-dark" id="wb-stitch-right-search" placeholder="搜索右侧..." style="flex:1; min-width:80px;">
-                                <select id="wb-stitch-right-filter" class="wb-input-dark" style="padding:4px; font-size:0.85em;"><option value="all">全部</option><option value="enabled">仅启用</option></select>
+                            <div style="display:flex; gap:6px;">
+                                <input class="wb-input-dark" id="wb-stitch-right-search" placeholder="搜索右侧..." style="flex:1;">
                                 <button class="wb-btn-rect mini" id="wb-stitch-right-all" style="padding:4px 8px;">全选</button>
                                 <button class="wb-btn-rect mini" id="wb-stitch-right-invert" style="padding:4px 8px;">反选</button>
-                                <button class="wb-btn-rect mini wb-btn-danger" id="wb-stitch-right-del" style="padding:4px 8px;" title="删除选中"><i class="fa-solid fa-trash"></i></button>
+                                <button class="wb-btn-rect mini" id="wb-stitch-right-clear" style="padding:4px 8px;">清空</button>
                             </div>
                             <div class="wb-stitch-list" id="wb-stitch-right-list" data-side="right" style="flex:1; min-height:300px; border:1px solid #f3f4f6; border-radius:8px; overflow-y:auto; padding:5px;"></div>
                             <div style="display:flex; gap:10px; justify-content:center;">
@@ -337,6 +328,7 @@ export const UI = {
             </div>
         `;
         document.body.appendChild(panel);
+        document.body.appendChild(panel);
         
         // --- 新增代码开始 ---
         this.forcePanelLayout(panel);
@@ -346,52 +338,34 @@ export const UI = {
         // --- 新增代码结束 ---
 
         const $ = (sel) => panel.querySelector(sel);
+
+        const $ = (sel) => panel.querySelector(sel);
         const $$ = (sel) => panel.querySelectorAll(sel);
 
-        // 键盘快捷键聚合处理：包含 ESC 关闭、Ctrl+F 搜索、Ctrl+S 保存
-        const hotkeyHandler = (e) => {
-            // 1. Ctrl + F 快速聚焦到搜索框
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-                const searchInput = document.getElementById('wb-search-entry');
-                // 只有在没有遮罩层（弹窗）打开时才响应
-                if (searchInput && !document.querySelector('.wb-modal-overlay') && !document.querySelector('.wb-sort-modal-overlay')) {
-                    e.preventDefault();
-                    searchInput.focus();
-                    return;
-                }
-            }
-            
-            // 2. Ctrl + S 强制立刻保存当前内容
-            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-                e.preventDefault();
-                Actions.flushPendingSave();
-                toastr.success('已强制保存更改');
-                return;
-            }
-
-            // 3. ESC 逻辑：关闭弹窗或主面板，并彻底解绑防泄漏
+        // ESC 快捷键：优先关闭子弹窗，如果没有子弹窗则关闭主面板
+        const escHandler = (e) => {
             if (e.key === 'Escape') {
+                // 检查是否有子弹窗（模态框、弹窗、下拉菜单等）
                 const subOverlays = document.querySelectorAll('.wb-modal-overlay:not(.wb-main-panel-overlay), .wb-sort-modal-overlay, #wb-content-popup-overlay, #wb-active-dropdown, #wb-gr-tag-menu-overlay');
                 const openDropdowns = document.querySelectorAll('.wb-menu-dropdown.show, .wb-gr-dropdown.show');
 
                 if (subOverlays.length > 0 || openDropdowns.length > 0) {
+                    // 有关闭子弹窗或下拉菜单，只关闭这些
                     subOverlays.forEach(el => el.remove());
                     openDropdowns.forEach(el => el.classList.remove('show'));
                 } else {
+                    // 没有子弹窗，关闭主面板
                     const mainPanel = document.getElementById(CONFIG.id);
                     if (mainPanel) {
-                        // 重点修复：主面板关闭前，彻底解绑全局键盘监听器
-                        document.removeEventListener('keydown', hotkeyHandler);
                         Actions.flushPendingSave().then(() => mainPanel.remove());
                     }
                 }
             }
         };
-        document.addEventListener('keydown', hotkeyHandler);
+        document.addEventListener('keydown', escHandler);
 
         $('#wb-close').onclick = async () => {
-            // 同步修改点击关闭按钮时的解绑名称
-            document.removeEventListener('keydown', hotkeyHandler);
+            document.removeEventListener('keydown', escHandler);
             await Actions.flushPendingSave();
             this.clearPopupViewportSync();
 
@@ -428,15 +402,6 @@ export const UI = {
         $('#wb-batch-position-apply').onclick = () => Actions.batchSetPosition($('#wb-batch-position').value);
         $('#wb-batch-order-apply').onclick = () => Actions.batchSetOrder($('#wb-batch-order').value);
         $('#wb-batch-depth-apply').onclick = () => Actions.batchSetDepth($('#wb-batch-depth').value);
-        
-        // 绑定批量替换按钮
-        $('#wb-batch-replace-apply').onclick = () => {
-            const findVal = $('#wb-batch-find').value;
-            const replaceVal = $('#wb-batch-replace').value;
-            const isRegex = $('#wb-batch-regex').checked;
-            Actions.batchReplaceText(findVal, replaceVal, isRegex);
-        };
-
         $('#btn-wb-menu-theme').onclick = () => Actions.switchTheme();
 
         const savedTheme = localStorage.getItem(THEME_KEY) || 'light';
@@ -1313,58 +1278,8 @@ export const UI = {
                 </div>
                 <!-- 预览和删除按钮 -->
                 <div class="wb-header-item wb-item-actions">
-                    <i class="fa-solid fa-gear btn-adv-toggle" style="cursor:pointer!important;padding:5px!important;color:#6b7280!important;" title="高级设置"></i>
-                    <i class="fa-solid fa-eye btn-preview" style="cursor:pointer!important;padding:5px!important;margin-left:5px!important;color:#6b7280!important;" title="编辑内容"></i>
+                    <i class="fa-solid fa-eye btn-preview" style="cursor:pointer!important;padding:5px!important;color:#6b7280!important;" title="编辑内容"></i>
                     <i class="fa-solid fa-trash btn-delete" style="cursor:pointer!important;padding:5px!important;margin-left:5px!important;color:#6b7280!important;" title="删除条目"></i>
-                </div>
-            </div>
-            <!-- 高级设置面板 (默认隐藏) -->
-            <div class="wb-card-advanced" style="display:none; padding:10px; background:rgba(0,0,0,0.02); border-top:1px dashed #e5e7eb; font-size:0.85em;">
-                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">次要关键词 (过滤)</span>
-                        <input class="wb-input-dark inp-keysecondary" value="${(entry.keysecondary || []).join(', ')}" placeholder="逗号分隔">
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">触发逻辑</span>
-                        <select class="wb-input-dark inp-logic">
-                            <option value="0" ${entry.selectiveLogic === 0 ? 'selected' : ''}>AND ANY (包含任一)</option>
-                            <option value="1" ${entry.selectiveLogic === 1 ? 'selected' : ''}>AND ALL (包含所有)</option>
-                            <option value="2" ${entry.selectiveLogic === 2 ? 'selected' : ''}>NOT ANY (不含任一)</option>
-                            <option value="3" ${entry.selectiveLogic === 3 ? 'selected' : ''}>NOT ALL (不含所有)</option>
-                        </select>
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">插入角色 (仅深度有效)</span>
-                        <select class="wb-input-dark inp-role">
-                            <option value="0" ${entry.role === 0 ? 'selected' : ''}>系统 (System)</option>
-                            <option value="1" ${entry.role === 1 ? 'selected' : ''}>用户 (User)</option>
-                            <option value="2" ${entry.role === 2 ? 'selected' : ''}>AI (Char)</option>
-                        </select>
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">黏性 (Sticky)</span>
-                        <input type="number" class="wb-input-dark inp-sticky" value="${entry.sticky || 0}" min="0">
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">冷却 (Cooldown)</span>
-                        <input type="number" class="wb-input-dark inp-cooldown" value="${entry.cooldown || 0}" min="0">
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">延迟 (Delay)</span>
-                        <input type="number" class="wb-input-dark inp-delay" value="${entry.delay || 0}" min="0">
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="color:#6b7280; font-weight:bold;">扫描深度 (Scan Depth)</span>
-                        <input type="number" class="wb-input-dark inp-scan-depth" value="${entry.scan_depth !== null ? entry.scan_depth : ''}" min="0" placeholder="默认">
-                    </div>
-                    <div class="wb-adv-item" style="display:flex; align-items:center; gap:6px; grid-column: 1 / -1; flex-wrap: wrap;">
-                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;"><input type="checkbox" class="inp-exclude-recursion" ${entry.excludeRecursion ? 'checked' : ''}> <span style="color:#eab308;">不可递归本条目</span></label>
-                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer; margin-left:10px;"><input type="checkbox" class="inp-prevent-recursion" ${entry.prevent_recursion ? 'checked' : ''}> 防止进一步递归</label>
-                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer; margin-left:10px;"><input type="checkbox" class="inp-delay-recursion" ${entry.delay_until_recursion ? 'checked' : ''}> 延迟到递归</label>
-                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer; margin-left:10px;"><input type="checkbox" class="inp-case-sensitive" ${entry.case_sensitive ? 'checked' : ''}> 区分大小写</label>
-                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer; margin-left:10px;"><input type="checkbox" class="inp-whole-word" ${entry.match_whole_words ? 'checked' : ''}> 完整单词</label>
-                    </div>
                 </div>
             </div>
         `;
@@ -3290,10 +3205,6 @@ export const UI = {
         }
 
         let options = '';
-        // [新增] 借鉴转移工具，在目标书(右侧)下拉列表加上“新建”选项
-        if (sideKey === 'right') {
-            options += '<option value="__NEW__" style="color:var(--wb-accent); font-weight:bold;">✨ -- 新建世界书 --</option>';
-        }
         all.forEach((name) => {
             const selected = name === side.book ? 'selected' : '';
             options += `<option value="${name}" ${selected}>${name}</option>`;
@@ -3311,29 +3222,8 @@ export const UI = {
             this.renderStitchSide(sideKey);
         };
 
-        // --- 新增：绑定过滤下拉框 ---
-        const filterSel = document.getElementById(`wb-stitch-${sideKey}-filter`);
-        if (filterSel) {
-            filterSel.value = side.filterMode || 'all';
-            filterSel.onchange = (e) => {
-                side.filterMode = e.target.value;
-                this.renderStitchSide(sideKey);
-            };
-        }
-        // --- 新增结束 ---
-
         // 按钮事件
         const bindBtn = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
-        
-        // --- 新增：删除选中按钮事件 ---
-        bindBtn(`wb-stitch-${sideKey}-del`, async () => {
-            if (!side.selected.size) return toastr.warning('请先勾选要删除的条目');
-            if (!confirm(`⚠️ 确定要从 "${side.book}" 中永久删除这 ${side.selected.size} 个条目吗？`)) return;
-            await Actions.stitchDeleteSelected(sideKey);
-            this.renderStitchView();
-        });
-        // --- 新增结束 ---
-        
         bindBtn(`wb-stitch-${sideKey}-all`, () => {
             const term = side.search.toLowerCase();
             side.entries.forEach(e => {
@@ -3355,13 +3245,9 @@ export const UI = {
         bindBtn(`wb-stitch-${sideKey}-copy`, () => Actions.stitchTransferSelected(sideKey, 'copy'));
         bindBtn(`wb-stitch-${sideKey}-move`, () => Actions.stitchTransferSelected(sideKey, 'move'));
 
-        // 渲染列表 (包含搜索和过滤逻辑)
+        // 渲染列表
         const term = side.search.toLowerCase();
-        const filtered = side.entries.filter(e => {
-            const matchSearch = !term || String(e.comment || '').toLowerCase().includes(term);
-            const matchFilter = side.filterMode === 'enabled' ? !e.disable : true;
-            return matchSearch && matchFilter;
-        });
+        const filtered = side.entries.filter(e => !term || String(e.comment || '').toLowerCase().includes(term));
 
         if (!filtered.length) {
             listEl.innerHTML = '<div style="text-align:center;color:#9ca3af;padding:20px;">无匹配条目</div>';
@@ -3384,36 +3270,11 @@ export const UI = {
                                 <span>@${posText}</span>
                             </div>
                         </div>
-                        <i class="fa-solid fa-eye wb-stitch-preview-btn" data-uid="${entry.uid}" style="color:#6b7280; cursor:pointer; margin-right:4px;" title="内联编辑条目"></i>
                         <i class="fa-solid fa-grip-lines" style="color:#9ca3af;"></i>
                     </div>
                 `;
             }).join('');
         }
-
-        // [新增] 借鉴转移工具：缝合界面内直接点击小眼睛编辑条目，不用切回编辑器
-        listEl.querySelectorAll('.wb-stitch-preview-btn').forEach(btn => {
-            btn.onclick = (e) => {
-                e.stopPropagation();
-                const uid = Number(e.target.dataset.uid);
-                const entry = side.entries.find(en => en.uid === uid);
-                if (entry) {
-                    // 临时覆盖环境上下文以重用已有的弹出编辑层
-                    const oldBook = STATE.currentBookName;
-                    const oldEntries = STATE.entries;
-                    STATE.currentBookName = side.book;
-                    STATE.entries = side.entries;
-                    
-                    this.openContentPopup(entry, e.target);
-                    
-                    // 等待弹窗弹出后立刻还原上下文，防止串台
-                    setTimeout(() => {
-                        STATE.currentBookName = oldBook;
-                        STATE.entries = oldEntries;
-                    }, 500);
-                }
-            };
-        });
 
         // 复选框和拖拽事件
         listEl.querySelectorAll('.wb-stitch-check').forEach(cb => {
@@ -3461,14 +3322,6 @@ export const UI = {
                 Actions.updateEntry(uid, d => d.depth = Number(e.target.value));
             } else if (e.target.classList.contains('inp-order')) {
                 Actions.updateEntry(uid, d => d.order = Number(e.target.value));
-            } else if (e.target.classList.contains('inp-keysecondary')) {
-                Actions.updateEntry(uid, d => d.keysecondary = e.target.value.split(/,|，/).map(k=>k.trim()).filter(Boolean));
-            } else if (e.target.classList.contains('inp-sticky')) {
-                Actions.updateEntry(uid, d => d.sticky = Number(e.target.value) || 0);
-            } else if (e.target.classList.contains('inp-cooldown')) {
-                Actions.updateEntry(uid, d => d.cooldown = Number(e.target.value) || 0);
-            } else if (e.target.classList.contains('inp-delay')) {
-                Actions.updateEntry(uid, d => d.delay = Number(e.target.value) || 0);
             }
         });
 
@@ -3485,22 +3338,6 @@ export const UI = {
             if (e.target.classList.contains('inp-enable')) {
                 card.classList.toggle('disabled', !e.target.checked);
                 Actions.updateEntry(uid, d => d.disable = !e.target.checked);
-            } else if (e.target.classList.contains('inp-scan-depth')) {
-                Actions.updateEntry(uid, d => d.scan_depth = e.target.value === '' ? null : Number(e.target.value));
-            } else if (e.target.classList.contains('inp-exclude-recursion')) {
-                Actions.updateEntry(uid, d => d.excludeRecursion = e.target.checked);
-            } else if (e.target.classList.contains('inp-case-sensitive')) {
-                Actions.updateEntry(uid, d => d.case_sensitive = e.target.checked);
-            } else if (e.target.classList.contains('inp-whole-word')) {
-                Actions.updateEntry(uid, d => d.match_whole_words = e.target.checked);
-            } else if (e.target.classList.contains('inp-prevent-recursion')) {
-                Actions.updateEntry(uid, d => d.prevent_recursion = e.target.checked);
-            } else if (e.target.classList.contains('inp-delay-recursion')) {
-                Actions.updateEntry(uid, d => d.delay_until_recursion = e.target.checked);
-            } else if (e.target.classList.contains('inp-logic')) {
-                Actions.updateEntry(uid, d => d.selectiveLogic = Number(e.target.value));
-            } else if (e.target.classList.contains('inp-role')) {
-                Actions.updateEntry(uid, d => d.role = Number(e.target.value));
             } else if (e.target.classList.contains('inp-type')) {
                 Actions.updateEntry(uid, d => {
                     d.constant = e.target.checked;

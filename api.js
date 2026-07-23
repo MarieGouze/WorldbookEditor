@@ -288,29 +288,6 @@ export const API = {
             entry.depth = Number.isFinite(Number(entry.depth)) ? Number(entry.depth) : 4;
             entry.order = Number.isFinite(Number(entry.order)) ? Number(entry.order) : idx;
             entry.selective = typeof entry.selective === 'boolean' ? entry.selective : !entry.constant;
-            
-            // [新增] 高级字段的安全继承，防止读取和保存时丢失
-            entry.keysecondary = Array.isArray(entry.keysecondary) ? entry.keysecondary : [];
-            entry.selectiveLogic = Number.isFinite(Number(entry.selectiveLogic)) ? Number(entry.selectiveLogic) : 0;
-            entry.role = Number.isFinite(Number(entry.role)) ? Number(entry.role) : 0;
-            entry.sticky = Number.isFinite(Number(entry.sticky)) ? Number(entry.sticky) : 0;
-            entry.cooldown = Number.isFinite(Number(entry.cooldown)) ? Number(entry.cooldown) : 0;
-            entry.delay = Number.isFinite(Number(entry.delay)) ? Number(entry.delay) : 0;
-            entry.prevent_recursion = !!entry.prevent_recursion;
-            entry.delay_until_recursion = !!entry.delay_until_recursion;
-            entry.group = String(entry.group ?? '');
-            entry.group_weight = Number.isFinite(Number(entry.group_weight)) ? Number(entry.group_weight) : 100;
-            entry.use_group_scoring = !!entry.use_group_scoring;
-            entry.automation_id = String(entry.automation_id ?? '');
-            
-            // [新增] 补齐 Source 1 和 Source 11 遗漏的高级设置 Key
-            entry.excludeRecursion = !!entry.excludeRecursion;
-            entry.scan_depth = Number.isFinite(Number(entry.scan_depth)) ? Number(entry.scan_depth) : null;
-            entry.case_sensitive = !!entry.case_sensitive;
-            entry.match_whole_words = !!entry.match_whole_words;
-            entry.characterFilter = entry.characterFilter || { isExclude: false, names: [], tags: [] };
-            entry.triggers = Array.isArray(entry.triggers) ? entry.triggers : [];
-            
             arr.push(entry);
         });
 

@@ -16,18 +16,6 @@ function cloneData(data) {
 }
 
 export const Actions = {
-    debouncedSave(delay = 1500) {
-        if (STATE.debouncer) clearTimeout(STATE.debouncer);
-        const targetBookName = STATE.currentBookName;
-        const targetEntries = STATE.entries;
-        STATE.debouncer = setTimeout(() => {
-            STATE.debouncer = null;
-            if (targetBookName && targetEntries) {
-                API.saveBookEntries(targetBookName, targetEntries);
-            }
-        }, delay);
-    },
-
     async flushPendingSave() {
         if (STATE.debouncer) {
             clearTimeout(STATE.debouncer);
@@ -72,7 +60,8 @@ export const Actions = {
         es.on(et.CHAT_CHANGED, () => { if (document.getElementById(CONFIG.id)) this.refreshAllContext(); });
         es.on(et.CHARACTER_SELECTED, () => {
             setTimeout(() => {
-                this.refreshAllContext();
+                if (document.getElementById(CONFIG.id)) this.refreshAllContext();
+                else this.refreshAllContext();
             }, 100);
         });
         es.on(et.CHARACTER_EDITED, () => { if (document.getElementById(CONFIG.id)) this.refreshAllContext(); });
@@ -220,23 +209,27 @@ export const Actions = {
             }
         }
 
-        this.debouncedSave(1500);
+        if (STATE.debouncer) clearTimeout(STATE.debouncer);
+        const targetBookName = STATE.currentBookName;
+        const targetEntries = STATE.entries;
+
+        STATE.debouncer = setTimeout(() => {
+            STATE.debouncer = null;
+            if (targetBookName && targetEntries) {
+                API.saveBookEntries(targetBookName, targetEntries);
+            }
+        }, 1500); // 延长防抖以减少 I/O
     },
     
     async addNewEntry() {
         if (!STATE.currentBookName) return toastr.warning("请先选择一本世界书");
-        // [修改] 采用基于时间戳和随机数的全局唯一 UID，避免交叉缝合导致内部引用断链
-        const timestamp = Date.now();
-        const random = Math.floor(Math.random() * 1000000);
-        const newUid = parseInt(`${timestamp}${String(random).padStart(6, '0')}`, 10);
+        const maxUid = STATE.entries.reduce((max, e) => Math.max(max, Number(e.uid) || 0), -1);
+        const newUid = maxUid + 1;
 
         const newEntry = {
             uid: newUid,
             comment: '新建条目', disable: false, content: '',
-            constant: true, key: [], keysecondary: [], order: 0, position: 0, depth: 4, probability: 100, selective: true,
-            selectiveLogic: 0, role: 0, sticky: 0, cooldown: 0, delay: 0,
-            prevent_recursion: false, delay_until_recursion: false, group: '', group_weight: 100, use_group_scoring: false, automation_id: '',
-            excludeRecursion: false, scan_depth: null, case_sensitive: false, match_whole_words: false, characterFilter: { isExclude: false, names: [], tags: [] }, triggers: []
+            constant: true, key: [], order: 0, position: 0, depth: 4, probability: 100, selective: true
         };
         await API.createEntry(STATE.currentBookName, [newEntry]);
         await this.loadBook(STATE.currentBookName);
@@ -492,12 +485,7 @@ export const Actions = {
             const entries = await API.loadBook(STATE.currentBookName);
             const entriesObj = {};
             entries.forEach(entry => { entriesObj[entry.uid] = entry; });
-            // [修改] 补充 name 和 extensions 根节点结构，兼容第三方识别
-            const exportData = {
-                name: STATE.currentBookName,
-                entries: entriesObj,
-                extensions: {}
-            };
+            const exportData = { entries: entriesObj };
             const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -668,7 +656,16 @@ export const Actions = {
     // ==========================================
 
     queueSave() {
-        this.debouncedSave(280);
+        if (STATE.debouncer) clearTimeout(STATE.debouncer);
+        const targetBookName = STATE.currentBookName;
+        const targetEntries = STATE.entries;
+
+        STATE.debouncer = setTimeout(() => {
+            STATE.debouncer = null;
+            if (targetBookName && targetEntries) {
+                API.saveBookEntries(targetBookName, targetEntries);
+            }
+        }, 280);
     },
 
     getVisibleEntries() {
@@ -758,42 +755,6 @@ export const Actions = {
         this.batchMutate((entry) => {
             entry.depth = depth;
         });
-    },
-
-    batchReplaceText(findText, replaceText, useRegex = false) {
-        if (!findText) return toastr.warning('请输入查找内容');
-        const selected = this.getSelectedEntries();
-        if (!selected.length) return toastr.warning('请先选择条目');
-
-        let matchCount = 0;
-        let regex;
-        try {
-            // 如果勾选正则则直接使用，否则转义所有特殊字符作为普通文本匹配
-            regex = useRegex ? new RegExp(findText, 'g') : new RegExp(findText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-        } catch (e) {
-            return toastr.error('正则表达式语法错误');
-        }
-
-        this.batchMutate((entry) => {
-            let changed = false;
-            // 替换正文内容
-            if (entry.content && regex.test(entry.content)) {
-                entry.content = entry.content.replace(regex, replaceText);
-                changed = true;
-            }
-            // 顺便支持替换标题
-            if (entry.comment && regex.test(entry.comment)) {
-                entry.comment = entry.comment.replace(regex, replaceText);
-                changed = true;
-            }
-            if (changed) matchCount++;
-        });
-
-        if (matchCount > 0) {
-            toastr.success(`已在 ${matchCount} 个选中条目中完成替换`);
-        } else {
-            toastr.info('在选中条目中未找到匹配内容');
-        }
     },
 
     batchSetOrder(startOrderValue) {
@@ -948,19 +909,6 @@ export const Actions = {
         const target = this.stitchSide(side);
         if (!bookName) return;
 
-        // [新增] 借鉴转移工具：支持在缝合目标列表里直接新建世界书
-        if (bookName === '__NEW__') {
-            const newName = prompt("✨ 请输入新建世界书的名称:");
-            if (!newName || STATE.allBookNames.includes(newName)) {
-                toastr.warning("名称为空或已存在");
-                return;
-            }
-            await API.createWorldbook(newName);
-            await this.refreshAllContext(); // 更新 allBookNames
-            bookName = newName;
-            if (UI.renderStitchView) UI.renderStitchView(); // 强制刷新UI选择框
-        }
-
         if (!force && target.book === bookName && target.entries.length) return;
 
         target.book = bookName;
@@ -969,10 +917,7 @@ export const Actions = {
     },
 
     getNextUid(entries) {
-        // [修改] 同步更换为全局唯一 UID 算法，杜绝多书移动时覆盖相同的号
-        const timestamp = Date.now();
-        const random = Math.floor(Math.random() * 1000000);
-        return parseInt(`${timestamp}${String(random).padStart(6, '0')}`, 10);
+        return entries.reduce((m, e) => Math.max(m, Number(e.uid) || 0), -1) + 1;
     },
 
     normalizeOrders(entries) {
@@ -1010,14 +955,6 @@ export const Actions = {
             movedUids.forEach((uid) => source.selected.delete(uid));
         }
 
-        // --- 修复：按照世界书引擎的原生深度/位置权重重新排序 ---
-        target.entries.sort((a, b) => {
-            const scoreA = this.getEntrySortScore(a);
-            const scoreB = this.getEntrySortScore(b);
-            if (scoreA !== scoreB) return scoreB - scoreA;
-            return (a.order ?? 0) - (b.order ?? 0) || a.uid - b.uid;
-        });
-        
         this.normalizeOrders(source.entries);
         this.normalizeOrders(target.entries);
 
@@ -1050,29 +987,20 @@ export const Actions = {
         if (UI.renderStitchView) UI.renderStitchView();
         toastr.success(mode === 'move' ? '已移动' : '已复制');
     },
+        async stitchTransferSelected(fromSide, mode) {
+        const source = this.stitchSide(fromSide);
+        const targetSide = this.otherSide(fromSide);
+        const selected = Array.from(source.selected);
 
-    // --- 新增：缝合界面的批量删除功能 ---
-    async stitchDeleteSelected(sideKey) {
-        const side = this.stitchSide(sideKey);
-        if (!side || !side.book) return;
-        const selected = Array.from(side.selected);
-        if (!selected.length) return;
-
-        side.entries = side.entries.filter(e => !selected.includes(Number(e.uid)));
-        side.selected.clear();
-        this.normalizeOrders(side.entries);
-
-        await API.saveBookEntries(side.book, side.entries);
-        
-        if (STATE.currentBookName === side.book) {
-            STATE.entries = cloneData(side.entries);
-            if (STATE.currentView === 'editor') {
-                UI.renderList(STATE.editorSearch);
-                UI.renderGlobalStats();
-            }
+        if (!selected.length) {
+            toastr.warning('请先勾选条目');
+            return;
         }
-        toastr.success(`已删除 ${selected.length} 个条目`);
-    },
+
+        await this.stitchTransfer(fromSide, targetSide, selected, mode);
+        if (UI.renderStitchView) UI.renderStitchView();
+        toastr.success(mode === 'move' ? '已移动' : '已复制');
+    }, // <--- 注意这里加了一个逗号
 
     // --- 以下是新增的代码 ---
     async openBookByName(name) {
